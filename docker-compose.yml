@@ -1,0 +1,322 @@
+version: '3.8'
+
+services:
+  # Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # Create topics on startup
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+  # PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: secureai
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d secureai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
+      - JWT_SECRET=your-secret-key-change-in-production
+      - PLANNER_URL=http://planner:8001
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Planner
+  planner:
+    build:
+      context: ./planner
+      dockerfile: Dockerfile
+    container_name: planner
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
+      - SCHEDULER_URL=http://scheduler:8002
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Scheduler
+  scheduler:
+    build:
+      context: ./scheduler
+      dockerfile: Dockerfile
+    container_name: scheduler
+    ports:
+      - "8002:8002"
+    environment:
+      - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - TASKS_TOPIC_PREFIX=tasks
+      - RESULTS_TOPIC=results
+    depends_on:
+      - kafka
+      - postgres
+
+  # Result Aggregator (Phase 2)
+  result-aggregator:
+    build:
+      context: ./result-aggregator
+      dockerfile: Dockerfile
+    container_name: result-aggregator
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - RESULTS_TOPIC=results
+      - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
+      - REDIS_URL=redis://redis:6379
+      - API_GATEWAY_URL=http://api-gateway:8000
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    restart: on-failure
+
+  # Research Agent (Phase 1 + heartbeats)
+  research-agent:
+    build:
+      context: ./research-agent
+      dockerfile: Dockerfile
+    container_name: research-agent
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - TASKS_TOPIC=tasks.research
+      - RESULTS_TOPIC=results
+      - RETRY_TOPIC=tasks.retry
+      - DLQ_TOPIC=tasks.dead_letter
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
+      - REDIS_URL=redis://redis:6379
+      - HEARTBEAT_INTERVAL=30
+      - MAX_RETRIES=3
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    restart: on-failure
+
+  # Browser Agent (Phase 2)
+  browser-agent:
+    build:
+      context: ./browser-agent
+      dockerfile: Dockerfile
+    container_name: browser-agent
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - TASKS_TOPIC=tasks.browser
+      - RESULTS_TOPIC=results
+      - RETRY_TOPIC=tasks.retry
+      - DLQ_TOPIC=tasks.dead_letter
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
+      - REDIS_URL=redis://redis:6379
+      - HEARTBEAT_INTERVAL=30
+      - MAX_RETRIES=3
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    restart: on-failure
+
+  # SQL Agent (Phase 2)
+  sql-agent:
+    build:
+      context: ./sql-agent
+      dockerfile: Dockerfile
+    container_name: sql-agent
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - TASKS_TOPIC=tasks.sql
+      - RESULTS_TOPIC=results
+      - RETRY_TOPIC=tasks.retry
+      - DLQ_TOPIC=tasks.dead_letter
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
+      - REDIS_URL=redis://redis:6379
+      - HEARTBEAT_INTERVAL=30
+      - MAX_RETRIES=3
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    restart: on-failure
+
+  # Email Agent (Phase 2)
+  email-agent:
+    build:
+      context: ./email-agent
+      dockerfile: Dockerfile
+    container_name: email-agent
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - TASKS_TOPIC=tasks.email
+      - RESULTS_TOPIC=results
+      - RETRY_TOPIC=tasks.retry
+      - DLQ_TOPIC=tasks.dead_letter
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
+      - REDIS_URL=redis://redis:6379
+      - HEARTBEAT_INTERVAL=30
+      - MAX_RETRIES=3
+      # SMTP Configuration (optional - for email functionality)
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - EMAIL_FROM=${EMAIL_FROM:-noreply@secureai.com}
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    restart: on-failure
+
+  # DLQ Handler (Retry + Dead Letter Queue)
+  dlq-handler:
+    build:
+      context: ./dlq-handler
+      dockerfile: Dockerfile
+    container_name: dlq-handler
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - RETRY_TOPIC=tasks.retry
+      - DLQ_TOPIC=tasks.dead_letter
+      - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
+      - MAX_RETRIES=3
+    depends_on:
+      - kafka
+      - postgres
+    restart: on-failure
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_API_URL=http://localhost:8000
+    depends_on:
+      - api-gateway
+
+  # Qdrant Vector Database (Phase 3)
+  qdrant:
+    image: qdrant/qdrant:v1.10.0
+    container_name: qdrant
+    ports:
+      - "6333:6333"  # REST API
+      - "6334:6334"  # gRPC API
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: on-failure
+
+  # Memory Manager (Phase 3)
+  memory-manager:
+    build:
+      context: ./memory-manager
+      dockerfile: Dockerfile
+    container_name: memory-manager
+    ports:
+      - "8005:8005"
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - QDRANT_COLLECTION=secureai_memory
+      - MEMORY_EXPIRY_DAYS=30
+      - MAX_MEMORY_RESULTS=10
+      - EMBEDDING_MODEL=text-embedding-3-small
+      - EMBEDDING_DIMENSION=1536
+    depends_on:
+      - qdrant
+    restart: on-failure
+
+  # MCP Integration (Phase 3)
+  mcp-integration:
+    build:
+      context: ./mcp-integration
+      dockerfile: Dockerfile
+    container_name: mcp-integration
+    ports:
+      - "8006:8006"
+    environment:
+      - MCP_SERVER_URL=http://localhost:8080
+      - MCP_API_KEY=${MCP_API_KEY:-}
+      - MCP_TIMEOUT=30
+    restart: on-failure
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  zookeeper_data:
+  zookeeper_logs:
+  kafka_data:
+
+networks:
+  default:
+    name: secureai-network
