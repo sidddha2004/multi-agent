@@ -42,7 +42,7 @@ Analytics Agent - Data visualization and insights
 
 Prerequisites
 Docker and Docker Compose installed
-A Z.AI API key (get one at z.ai)
+An OpenAI API key (get one at openai.com)
 
 Step 1: Get the Code
 ```bash
@@ -53,7 +53,7 @@ cd multi-ai
 Step 2: Setup Your API Key
 ```bash
 cp .env.example .env
-# Edit .env and add your ZAI_API_KEY=your_key_here
+# Edit .env and add your OPENAI_API_KEY=your_key_here
 ```
 
 Step 3: Start Your AI Team
@@ -102,7 +102,7 @@ Frontend: React (beautiful, responsive UI)
 Messaging: Apache Kafka (reliable task distribution)
 Database: PostgreSQL (robust data storage)
 Caching: Redis (speedy responses)
-AI: Z.AI GLM-4.5 (powerful language model)
+AI: OpenAI GPT-4 (powerful language model)
 Containers: Docker (easy deployment)
 
 Key Components
@@ -199,7 +199,7 @@ Make sure all containers are running: docker compose ps
 Check frontend logs: docker compose logs frontend
 
 "Tasks are stuck in processing!"
-Check if your API key is valid in .env
+Check if your OpenAI API key is valid in .env
 View agent logs: docker compose logs research-agent
 Verify Kafka is working: docker compose logs kafka
 

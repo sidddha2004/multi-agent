@@ -27,7 +27,7 @@ TASKS_TOPIC = os.getenv("TASKS_TOPIC", "tasks.browser")
 RESULTS_TOPIC = os.getenv("RESULTS_TOPIC", "results")
 RETRY_TOPIC = os.getenv("RETRY_TOPIC", "tasks.retry")
 DLQ_TOPIC = os.getenv("DLQ_TOPIC", "tasks.dead_letter")
-ZAI_API_KEY = os.getenv("ZAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/secureai")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))  # seconds
@@ -158,21 +158,20 @@ def heartbeat_loop():
 
 def process_with_llm(description: str) -> str:
     """Process task with LLM for interpretation"""
-    if not ZAI_API_KEY:
+    if not OPENAI_API_KEY:
         return description  # Return as-is if no API key
 
     try:
         from openai import OpenAI
         client = OpenAI(
-            api_key=ZAI_API_KEY,
-            base_url="https://api.z.ai/api/paas/v4"
+            api_key=OPENAI_API_KEY
         )
 
         system_prompt = """You are a browser automation specialist. Extract the key information needed for web scraping from the user request.
 Return the main URL to visit and what to extract/analyze."""
 
         response = client.chat.completions.create(
-            model="glm-4.5",
+            model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": description}

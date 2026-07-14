@@ -24,7 +24,7 @@ TASKS_TOPIC = os.getenv("TASKS_TOPIC", "tasks.research")
 RESULTS_TOPIC = os.getenv("RESULTS_TOPIC", "results")
 RETRY_TOPIC = os.getenv("RETRY_TOPIC", "tasks.retry")
 DLQ_TOPIC = os.getenv("DLQ_TOPIC", "tasks.dead_letter")
-ZAI_API_KEY = os.getenv("ZAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/secureai")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 SCHEDULER_URL = os.getenv("SCHEDULER_URL", "http://scheduler:8002")
@@ -189,20 +189,19 @@ def register_with_scheduler():
 
 def process_with_llm(description: str) -> str:
     """Process task with LLM"""
-    if not ZAI_API_KEY:
-        return f"Processed (no Z.AI API key): {description}"
+    if not OPENAI_API_KEY:
+        return f"Processed (no OpenAI API key): {description}"
 
     try:
         client = OpenAI(
-            api_key=ZAI_API_KEY,
-            base_url="https://api.z.ai/api/paas/v4"
+            api_key=OPENAI_API_KEY
         )
 
         system_prompt = """You are a helpful AI assistant. Process the given task and provide a helpful, accurate response.
 Be concise but thorough. If the task requires research or analysis, provide well-structured findings."""
 
         response = client.chat.completions.create(
-            model="glm-4.5",
+            model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": description}
