@@ -82,7 +82,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
       - SCHEDULER_URL=http://scheduler:8002
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ZAI_API_KEY=${ZAI_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -134,7 +134,7 @@ services:
       - RESULTS_TOPIC=results
       - RETRY_TOPIC=tasks.retry
       - DLQ_TOPIC=tasks.dead_letter
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ZAI_API_KEY=${ZAI_API_KEY}
       - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
       - REDIS_URL=redis://redis:6379
       - HEARTBEAT_INTERVAL=30
@@ -157,7 +157,7 @@ services:
       - RESULTS_TOPIC=results
       - RETRY_TOPIC=tasks.retry
       - DLQ_TOPIC=tasks.dead_letter
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ZAI_API_KEY=${ZAI_API_KEY}
       - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
       - REDIS_URL=redis://redis:6379
       - HEARTBEAT_INTERVAL=30
@@ -180,7 +180,7 @@ services:
       - RESULTS_TOPIC=results
       - RETRY_TOPIC=tasks.retry
       - DLQ_TOPIC=tasks.dead_letter
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ZAI_API_KEY=${ZAI_API_KEY}
       - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
       - REDIS_URL=redis://redis:6379
       - HEARTBEAT_INTERVAL=30
@@ -203,7 +203,7 @@ services:
       - RESULTS_TOPIC=results
       - RETRY_TOPIC=tasks.retry
       - DLQ_TOPIC=tasks.dead_letter
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ZAI_API_KEY=${ZAI_API_KEY}
       - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
       - REDIS_URL=redis://redis:6379
       - HEARTBEAT_INTERVAL=30

@@ -22,7 +22,7 @@ TASKS_TOPIC = os.getenv("TASKS_TOPIC", "tasks.sql")
 RESULTS_TOPIC = os.getenv("RESULTS_TOPIC", "results")
 RETRY_TOPIC = os.getenv("RETRY_TOPIC", "tasks.retry")
 DLQ_TOPIC = os.getenv("DLQ_TOPIC", "tasks.dead_letter")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ZAI_API_KEY = os.getenv("ZAI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/secureai")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))  # seconds
@@ -195,16 +195,19 @@ def execute_safe_query(query: str) -> List[Dict[str, Any]]:
 
 def generate_sql_query(description: str, schema: str) -> str:
     """Generate SQL query using LLM"""
-    if not OPENAI_API_KEY:
+    if not ZAI_API_KEY:
         # Fallback: simple extraction
         if "SELECT" in description.upper():
             return description
         else:
-            return "SELECT 'Please provide OpenAI API key for natural language query generation' as message"
+            return "SELECT 'Please provide Z.AI API key for natural language query generation' as message"
 
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = OpenAI(
+            api_key=ZAI_API_KEY,
+            base_url="https://api.z.ai/api/paas/v4"
+        )
 
         system_prompt = f"""You are a SQL expert. Convert natural language requests into SQL queries.
 Available schema:\n{schema}
@@ -213,7 +216,7 @@ Return ONLY the SQL query, no explanations. Only SELECT queries are allowed for 
 If the request cannot be fulfilled with a SELECT query, return a helpful message."""
 
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="glm-4.5",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": description}

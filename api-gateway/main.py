@@ -1,11 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field #it's used to define the structure of requests and responses.TYPE-safety
 from datetime import datetime, timedelta
-from typing import Optional, List
-from jose import jwt
-import bcrypt
+from typing import Optional, List#autocomplete ,readability
+from jose import jwt#create and verify jwt tokens
+import bcrypt#hash pwd
 import redis
 import httpx
 import json
@@ -16,6 +16,7 @@ import logging
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+#for orm 
 
 # Logger
 logging.basicConfig(level=logging.INFO)
@@ -148,11 +149,11 @@ app.add_middleware(
 # Security
 security = HTTPBearer()
 
-# Rate Limiting
+# Rate Limiting using redis
 async def check_rate_limit(identifier: str, max_requests: int = 10, window: int = 60):
     """Rate limiting: max_requests per window seconds"""
     key = f"rate_limit:{identifier}"
-    current = redis_client.get(key)
+    current = redis_client.get(key)#how many reuests has user made upto now 
     if current is None:
         redis_client.setex(key, window, 1)
         return True

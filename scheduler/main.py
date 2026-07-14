@@ -54,14 +54,33 @@ def get_db():
         db.close()
 
 def get_kafka_producer():
-    """Create Kafka producer"""
-    return KafkaProducer(
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-        acks='all',
-        retries=3,
-        max_in_flight_requests_per_connection=1
-    )
+    """Create Kafka producer with retry logic"""
+    max_retries = 10
+    retry_delay = 5
+
+    for attempt in range(max_retries):
+        try:
+            producer = KafkaProducer(
+                bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                acks='all',
+                retries=3,
+                max_in_flight_requests_per_connection=1
+            )
+            # Test connection
+            producer.bootstrap_connected()
+            logger.info(f"Kafka producer created and connected (attempt {attempt + 1}/{max_retries})")
+            return producer
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Failed to create Kafka producer (attempt {attempt + 1}/{max_retries}): {e}, retrying in {retry_delay}s...")
+                import time
+                time.sleep(retry_delay)
+            else:
+                logger.error(f"Failed to create Kafka producer after {max_retries} attempts: {e}")
+                raise
+
+    return None
 
 # Pydantic Schemas
 class TaskMessage(BaseModel):
@@ -85,7 +104,6 @@ class AgentRegistrationRequest(BaseModel):
     agent_type: str
     capabilities: List[str]
     kafka_topic: str
-    task_ids: List[int]
 
 # FastAPI App
 app = FastAPI(title="SecureAI Scheduler", version="1.0.0")
@@ -149,13 +167,14 @@ async def startup_event():
     finally:
         db.close()
 
-    # Verify Kafka connection
+    # Verify Kafka connection (but don't fail startup if Kafka isn't ready yet)
     try:
         producer = get_kafka_producer()
-        producer.bootstrap_connected()
-        logger.info("Connected to Kafka successfully")
+        if producer:
+            producer.bootstrap_connected()
+            logger.info("Connected to Kafka successfully")
     except Exception as e:
-        logger.error(f"Failed to connect to Kafka: {e}")
+        logger.warning(f"Kafka not available at startup, will retry when scheduling tasks: {e}")
 
 @app.get("/")
 def health():

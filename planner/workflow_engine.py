@@ -31,7 +31,7 @@ Base = declarative_base()
 # Workflow State
 class WorkflowState(TypedDict):
     """State for LangGraph workflow planning"""
-    prompt: str
+    prompt: str 
     job_id: int
     trace_id: str
     correlation_id: str
@@ -59,10 +59,10 @@ class Workflow(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-
 class WorkflowExecution(Base):
     """Workflow execution tracking"""
     __tablename__ = "workflow_executions"
+
 
     id = Column(Integer, primary_key=True, index=True)
     workflow_id = Column(Integer, nullable=False)

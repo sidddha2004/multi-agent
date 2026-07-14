@@ -23,7 +23,7 @@ TASKS_TOPIC = os.getenv("TASKS_TOPIC", "tasks.email")
 RESULTS_TOPIC = os.getenv("RESULTS_TOPIC", "results")
 RETRY_TOPIC = os.getenv("RETRY_TOPIC", "tasks.retry")
 DLQ_TOPIC = os.getenv("DLQ_TOPIC", "tasks.dead_letter")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ZAI_API_KEY = os.getenv("ZAI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/secureai")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))  # seconds
@@ -161,7 +161,7 @@ def heartbeat_loop():
 
 def parse_email_request(description: str) -> Dict[str, Any]:
     """Parse email request using LLM or regex"""
-    if not OPENAI_API_KEY:
+    if not ZAI_API_KEY:
         # Simple regex-based parsing
         email_pattern = r'[\w\.-]+@[\w\.-]+\.\w+'
         emails = re.findall(email_pattern, description)
@@ -175,7 +175,10 @@ def parse_email_request(description: str) -> Dict[str, Any]:
 
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = OpenAI(
+            api_key=ZAI_API_KEY,
+            base_url="https://api.z.ai/api/paas/v4"
+        )
 
         system_prompt = """Extract email details from the user request.
 Return JSON format:
@@ -187,7 +190,7 @@ Return JSON format:
 """
 
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="glm-4.5",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": description}
