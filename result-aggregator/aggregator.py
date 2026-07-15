@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import time
+import hashlib
+import sys
 from datetime import datetime
 from typing import Dict, Any
 
@@ -12,6 +14,13 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import redis
 from dotenv import load_dotenv
+
+# Add shared utilities to path
+sys.path.append('/shared')
+try:
+    from shared.redis_utils import cache_result, get_cached_result, generate_result_hash
+except ImportError:
+    logger.warning("Shared utilities not available")
 
 load_dotenv()
 
@@ -139,7 +148,7 @@ def aggregate_results(job_id: int, trace_id: str) -> Dict[str, Any]:
 
 
 def process_result(result_message: Dict[str, Any]):
-    """Process a single result message"""
+    """Process a single result message with Redis caching"""
     task_id = result_message.get("task_id")
     job_id = result_message.get("job_id")
     trace_id = result_message.get("trace_id")
@@ -162,6 +171,28 @@ def process_result(result_message: Dict[str, Any]):
             logger.info(f"Updated task {task_id} with result")
         else:
             logger.warning(f"Task {task_id} ({trace_id}) not found")
+
+        # Cache result in Redis for future retrieval
+        try:
+            result_hash = generate_result_hash({
+                "task_id": task_id,
+                "job_id": job_id,
+                "trace_id": trace_id,
+                "agent_type": agent_type,
+                "description": task.description if task else ""
+            })
+            cache_result(result_hash, {
+                "task_id": task_id,
+                "job_id": job_id,
+                "trace_id": trace_id,
+                "agent_type": agent_type,
+                "result": result,
+                "status": status,
+                "timestamp": datetime.utcnow().isoformat()
+            }, ttl=1800)  # 30 minutes cache
+            logger.info(f"Cached result for task {task_id}")
+        except Exception as cache_error:
+            logger.warning(f"Failed to cache result: {cache_error}")
 
         # Check if all tasks in job are complete
         tasks = db.query(Task).filter(Task.job_id == job_id).all()

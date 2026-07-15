@@ -4,12 +4,25 @@ from typing import List, Optional
 import httpx
 import os
 import json
+import redis
+import sys
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from dotenv import load_dotenv
 import logging
+
+# Add shared utilities to path
+sys.path.append('/shared')
+try:
+    from shared.redis_utils import set_workflow_state, get_workflow_state, update_task_status as update_redis_task_status
+except ImportError:
+    logger.warning("Shared utilities not available")
+
+# Redis for workflow state management
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
+redis_client = redis.from_url(REDIS_URL)
 
 # Load environment variables
 load_dotenv()
@@ -234,6 +247,32 @@ async def create_plan(request: PlanRequest, db: Session = Depends(get_db)):
         except Exception as e:
             logger.error(f"Failed to save workflow execution: {e}")
             workflow_execution_id = None
+
+        # Store workflow state in Redis for real-time tracking
+        try:
+            workflow_state = {
+                "job_id": request.job_id,
+                "trace_id": request.trace_id,
+                "workflow_id": workflow_result.get("workflow_id"),
+                "workflow_type": workflow_result.get("workflow_type", "sequential"),
+                "status": "pending",
+                "tasks": [
+                    {
+                        "task_id": task.id,
+                        "description": task.description,
+                        "agent_type": task.agent_type,
+                        "status": "scheduled"
+                    }
+                    for task in created_tasks
+                ],
+                "created_at": datetime.now().isoformat(),
+                "total_tasks": len(created_tasks),
+                "completed_tasks": 0
+            }
+            set_workflow_state(request.job_id, workflow_state, ttl=3600)
+            logger.info(f"Workflow state stored in Redis for job {request.job_id}")
+        except Exception as e:
+            logger.warning(f"Failed to store workflow state in Redis: {e}")
 
         # Send tasks to Scheduler (with trace_id, correlation_id, and capabilities)
         async with httpx.AsyncClient(timeout=30.0) as client:

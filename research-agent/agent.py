@@ -3,6 +3,8 @@ import logging
 import os
 import time
 import threading
+import hashlib
+import sys
 from datetime import datetime
 from typing import Dict, Any
 
@@ -15,6 +17,13 @@ from sqlalchemy.orm import sessionmaker
 import redis
 import httpx
 from dotenv import load_dotenv
+
+# Add shared utilities to path
+sys.path.append('/shared')
+try:
+    from shared.redis_utils import DistributedLock, acquire_task_lock, is_task_locked, cache_result as cache_task_result, generate_result_hash
+except ImportError:
+    logger.warning("Shared utilities not available, distributed locking disabled")
 
 load_dotenv()
 
@@ -187,10 +196,44 @@ def register_with_scheduler():
     return False
 
 
+def get_query_hash(description: str) -> str:
+    """Generate hash for query caching"""
+    return hashlib.md5(description.encode()).hexdigest()
+
+def get_cached_result(query_hash: str) -> str:
+    """Get cached result from Redis"""
+    try:
+        redis_client = redis.from_url(REDIS_URL)
+        cache_key = f"cache:research:{query_hash}"
+        cached = redis_client.get(cache_key)
+        if cached:
+            logger.info(f"Cache hit for {query_hash}")
+            return cached.decode('utf-8')
+        return None
+    except Exception as e:
+        logger.error(f"Cache retrieval error: {e}")
+        return None
+
+def cache_result(query_hash: str, result: str, ttl_seconds: int = 900):
+    """Cache result in Redis with TTL"""
+    try:
+        redis_client = redis.from_url(REDIS_URL)
+        cache_key = f"cache:research:{query_hash}"
+        redis_client.setex(cache_key, ttl_seconds, result)
+        logger.info(f"Cached result for {query_hash} (TTL: {ttl_seconds}s)")
+    except Exception as e:
+        logger.error(f"Cache storage error: {e}")
+
 def process_with_llm(description: str) -> str:
-    """Process task with LLM"""
+    """Process task with LLM and caching"""
     if not OPENAI_API_KEY:
         return f"Processed (no OpenAI API key): {description}"
+
+    # Check cache first
+    query_hash = get_query_hash(description)
+    cached_result = get_cached_result(query_hash)
+    if cached_result:
+        return cached_result
 
     try:
         client = OpenAI(
@@ -210,7 +253,12 @@ Be concise but thorough. If the task requires research or analysis, provide well
             max_tokens=1000
         )
 
-        return response.choices[0].message.content
+        result = response.choices[0].message.content
+
+        # Cache the result (15 minutes TTL)
+        cache_result(query_hash, result, 900)
+
+        return result
 
     except Exception as e:
         logger.error(f"LLM Error: {e}")
@@ -268,7 +316,7 @@ def send_to_retry_queue(task_message: Dict[str, Any], error_message: str, produc
 
 
 def process_task(task_message: Dict[str, Any], producer: KafkaProducer):
-    """Process a single task - Agent handles the full lifecycle with retry logic"""
+    """Process a single task - Agent handles the full lifecycle with retry logic and distributed locking"""
     task_id = task_message.get("task_id")
     job_id = task_message.get("job_id")
     trace_id = task_message.get("trace_id")
@@ -282,46 +330,79 @@ def process_task(task_message: Dict[str, Any], producer: KafkaProducer):
     if is_retry:
         logger.info(f"This is a retry attempt #{retry_count}")
 
+    # Acquire distributed lock to prevent duplicate processing
+    task_lock = None
     try:
-        # Update job status to processing
-        update_job_status(job_id, trace_id, "processing")
+        # Try to acquire lock (timeout 10s, TTL 5min)
+        try:
+            from shared.redis_utils import acquire_task_lock
+            task_lock = acquire_task_lock(task_id, trace_id, ttl=300, timeout=10)
+        except ImportError:
+            logger.warning("Distributed lock not available, proceeding without lock")
 
-        # Update task status to processing
-        update_task_status(task_id, trace_id, "processing")
+        if task_lock is None:
+            logger.warning(f"Could not acquire lock for task {task_id}, may be processed by another agent")
+            return
 
-        # Process with LLM
-        result = process_with_llm(description)
+        logger.info(f"Acquired lock for task {task_id}")
 
-        # Update task status to completed with result
-        update_task_status(task_id, trace_id, "completed", result)
+        try:
+            # Update job status to processing
+            update_job_status(job_id, trace_id, "processing")
 
-        # Publish result to results topic
-        publish_result(task_id, job_id, trace_id, result, agent_type, producer, correlation_id)
+            # Update task status to processing
+            update_task_status(task_id, trace_id, "processing")
 
-        # Update job status to completed
-        update_job_status(job_id, trace_id, "completed")
+            # Process with LLM
+            result = process_with_llm(description)
 
-        logger.info(f"Successfully completed task {task_id} (trace_id: {trace_id}, correlation_id: {correlation_id})")
+            # Cache the result
+            try:
+                result_hash = generate_result_hash({
+                    "task_id": task_id,
+                    "description": description,
+                    "agent_type": agent_type
+                })
+                cache_task_result(result_hash, {"result": result, "task_id": task_id})
+            except ImportError:
+                pass
 
-    except Exception as e:
-        logger.error(f"Failed to process task {task_id} (trace_id: {trace_id}): {e}")
+            # Update task status to completed with result
+            update_task_status(task_id, trace_id, "completed", result)
 
-        # Check if we should retry
-        current_retry_count = retry_count if is_retry else 0
-        if current_retry_count < MAX_RETRIES:
-            logger.info(f"Sending task {task_id} to retry queue (attempt {current_retry_count + 1}/{MAX_RETRIES})")
+            # Publish result to results topic
+            publish_result(task_id, job_id, trace_id, result, agent_type, producer, correlation_id)
 
-            # Update task status to retrying
-            update_task_status(task_id, trace_id, "retrying", f"Retry {current_retry_count + 1}: {str(e)}")
+            # Update job status to completed
+            update_job_status(job_id, trace_id, "completed")
 
-            # Send to retry queue
-            send_to_retry_queue(task_message, str(e), producer)
-        else:
-            logger.error(f"Task {task_id} exceeded max retries ({MAX_RETRIES}), marking as failed")
+            logger.info(f"Successfully completed task {task_id} (trace_id: {trace_id}, correlation_id: {correlation_id})")
 
-            # Update status to failed
-            update_task_status(task_id, trace_id, "failed", f"Failed after {MAX_RETRIES} retries: {str(e)}")
-            update_job_status(job_id, trace_id, "failed")
+        except Exception as e:
+            logger.error(f"Failed to process task {task_id} (trace_id: {trace_id}): {e}")
+
+            # Check if we should retry
+            current_retry_count = retry_count if is_retry else 0
+            if current_retry_count < MAX_RETRIES:
+                logger.info(f"Sending task {task_id} to retry queue (attempt {current_retry_count + 1}/{MAX_RETRIES})")
+
+                # Update task status to retrying
+                update_task_status(task_id, trace_id, "retrying", f"Retry {current_retry_count + 1}: {str(e)}")
+
+                # Send to retry queue
+                send_to_retry_queue(task_message, str(e), producer)
+            else:
+                logger.error(f"Task {task_id} exceeded max retries ({MAX_RETRIES}), marking as failed")
+
+                # Update status to failed
+                update_task_status(task_id, trace_id, "failed", f"Failed after {MAX_RETRIES} retries: {str(e)}")
+                update_job_status(job_id, trace_id, "failed")
+
+    finally:
+        # Always release the lock
+        if task_lock is not None:
+            task_lock.release()
+            logger.info(f"Released lock for task {task_id}")
 
 
 def main():

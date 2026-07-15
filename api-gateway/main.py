@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status, Request
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field #it's used to define the structure of requests and responses.TYPE-safety
@@ -16,6 +17,8 @@ import logging
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+from functools import wraps
+import time
 #for orm 
 
 # Logger
@@ -30,6 +33,70 @@ Base = declarative_base()
 
 # Redis
 redis_client = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"))
+
+# Rate Limiting Config
+RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "100"))  # requests per window
+RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))  # seconds
+
+def get_client_ip(request: Request) -> str:
+    """Get client IP address from request"""
+    if "X-Forwarded-For" in request.headers:
+        return request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+async def check_rate_limit_enhanced(identifier: str, max_requests: int = None, window: int = None) -> tuple[bool, int]:
+    """Enhanced rate limiting with Redis - returns (allowed, remaining_requests)"""
+    max_requests = max_requests or RATE_LIMIT_MAX_REQUESTS
+    window = window or RATE_LIMIT_WINDOW
+
+    key = f"rate_limit:{identifier}"
+    try:
+        current = redis_client.get(key)
+        if current is None:
+            redis_client.setex(key, window, 1)
+            return True, max_requests - 1
+
+        requests = int(current)
+        if requests >= max_requests:
+            return False, 0
+
+        redis_client.incr(key)
+        return True, max_requests - requests - 1
+    except Exception as e:
+        logger.error(f"Rate limit error: {e}")
+        return True, max_requests  # Fail open
+
+async def rate_limit_middleware(request: Request, call_next):
+    """Rate limiting middleware"""
+    # Skip rate limiting for WebSocket and health checks
+    if request.url.path.startswith("/ws") or request.url.path == "/health":
+        return await call_next(request)
+
+    client_ip = get_client_ip(request)
+    allowed, remaining = await check_rate_limit_enhanced(client_ip)
+
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "Rate limit exceeded",
+                "message": f"Maximum {RATE_LIMIT_MAX_REQUESTS} requests per {RATE_LIMIT_WINDOW} seconds",
+                "retry_after": RATE_LIMIT_WINDOW,
+                "limit": RATE_LIMIT_MAX_REQUESTS,
+                "window": RATE_LIMIT_WINDOW
+            },
+            headers={
+                "X-RateLimit-Limit": str(RATE_LIMIT_MAX_REQUESTS),
+                "X-RateLimit-Remaining": "0",
+                "X-RateLimit-Reset": str(RATE_LIMIT_WINDOW)
+            }
+        )
+
+    response = await call_next(request)
+    response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_MAX_REQUESTS)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    response.headers["X-RateLimit-Reset"] = str(RATE_LIMIT_WINDOW)
+    return response
 
 # JWT Config
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
@@ -91,23 +158,106 @@ Base.metadata.create_all(bind=engine)
 class ConnectionManager:
     def __init__(self):
         self.active_connections: dict[int, List[WebSocket]] = {}
+        self.redis_pubsub = None
+        self.pubsub_task = None
 
     async def connect(self, websocket: WebSocket, user_id: int):
         if user_id not in self.active_connections:
             self.active_connections[user_id] = []
+            # Subscribe to user's Redis channel
+            await self.subscribe_to_user_channel(user_id)
         self.active_connections[user_id].append(websocket)
 
     def disconnect(self, websocket: WebSocket, user_id: int):
         if user_id in self.active_connections:
             self.active_connections[user_id].remove(websocket)
+            # Unsubscribe if no more connections
+            if not self.active_connections[user_id]:
+                del self.active_connections[user_id]
+
+    async def subscribe_to_user_channel(self, user_id: int):
+        """Subscribe to Redis pub/sub for user updates"""
+        try:
+            if self.redis_pubsub is None:
+                self.redis_pubsub = redis_client.pubsub()
+                await self.start_pubsub_listener()
+
+            channel = f"user_updates:{user_id}"
+            self.redis_pubsub.subscribe(channel)
+            logger.info(f"Subscribed to Redis channel: {channel}")
+
+        except Exception as e:
+            logger.error(f"Failed to subscribe to user channel: {e}")
+
+    async def start_pubsub_listener(self):
+        """Start listening to Redis pub/sub messages"""
+        if self.pubsub_task is None:
+            self.pubsub_task = asyncio.create_task(self.pubsub_listener())
+
+    async def pubsub_listener(self):
+        """Listen for Redis pub/sub messages and broadcast to WebSocket clients"""
+        try:
+            while True:
+                message = self.redis_pubsub.get_message(timeout=1.0)
+                if message and message['type'] == 'message':
+                    await self.handle_redis_message(message)
+                await asyncio.sleep(0.01)
+        except Exception as e:
+            logger.error(f"PubSub listener error: {e}")
+
+    async def handle_redis_message(self, message: dict):
+        """Handle incoming Redis pub/sub message"""
+        try:
+            channel = message['channel'].decode()
+            data = json.loads(message['data'])
+
+            # Extract user_id from channel name
+            if channel.startswith('user_updates:'):
+                user_id = int(channel.split(':')[1])
+                await self.send_update(user_id, data)
+
+            # Handle global broadcasts
+            elif channel == 'global_updates':
+                await self.broadcast_to_all(data)
+
+        except Exception as e:
+            logger.error(f"Error handling Redis message: {e}")
 
     async def send_update(self, user_id: int, message: dict):
+        """Send update to specific user's WebSocket connections"""
         if user_id in self.active_connections:
             for connection in self.active_connections[user_id]:
                 try:
                     await connection.send_json(message)
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"WebSocket send error: {e}")
+
+    async def broadcast_to_all(self, message: dict):
+        """Broadcast message to all connected users"""
+        for user_id in self.active_connections:
+            await self.send_update(user_id, message)
+
+    async def publish_to_redis(self, channel: str, message: dict):
+        """Publish message to Redis pub/sub"""
+        try:
+            redis_client.publish(channel, json.dumps(message))
+        except Exception as e:
+            logger.error(f"Redis publish error: {e}")
+
+    async def publish_user_update(self, user_id: int, message: dict):
+        """Publish update for specific user"""
+        channel = f"user_updates:{user_id}"
+        await self.publish_to_redis(channel, message)
+
+    async def publish_task_update(self, task_data: dict):
+        """Publish task progress update"""
+        channel = f"task_updates:{task_data.get('trace_id', '')}"
+        await self.publish_to_redis(channel, task_data)
+
+    async def publish_workflow_update(self, workflow_data: dict):
+        """Publish workflow progress update"""
+        channel = f"workflow_updates:{workflow_data.get('job_id', '')}"
+        await self.publish_to_redis(channel, workflow_data)
 
 manager = ConnectionManager()
 
@@ -138,6 +288,9 @@ class TaskResponse(BaseModel):
 # FastAPI App
 app = FastAPI(title="SecureAI API Gateway", version="1.0.0")
 
+# Add rate limiting middleware
+app.middleware("http")(rate_limit_middleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -148,19 +301,6 @@ app.add_middleware(
 
 # Security
 security = HTTPBearer()
-
-# Rate Limiting using redis
-async def check_rate_limit(identifier: str, max_requests: int = 10, window: int = 60):
-    """Rate limiting: max_requests per window seconds"""
-    key = f"rate_limit:{identifier}"
-    current = redis_client.get(key)#how many reuests has user made upto now 
-    if current is None:
-        redis_client.setex(key, window, 1)
-        return True
-    if int(current) >= max_requests:
-        return False
-    redis_client.incr(key)
-    return True
 
 # Auth Dependencies
 def get_db():
@@ -376,7 +516,7 @@ async def list_tasks(
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: str):
-    """WebSocket endpoint for real-time updates with Redis subscription"""
+    """Enhanced WebSocket endpoint with Redis pub/sub for real-time updates"""
     await websocket.accept()  # Important: Accept the WebSocket connection first
 
     # Verify token
@@ -392,17 +532,45 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
         return
 
     await manager.connect(websocket, user_id)
-    logger.info(f"WebSocket connected for user {user_id}")
+
+    # Send connection confirmation
+    await websocket.send_json({
+        "type": "connection_established",
+        "user_id": user_id,
+        "timestamp": datetime.utcnow().isoformat(),
+        "message": "Connected to SecureAI real-time updates"
+    })
+
+    logger.info(f"WebSocket connected for user {user_id} with Redis pub/sub")
 
     try:
-        # Simple keep-alive loop
+        # Enhanced message handling loop
         while True:
-            # Wait for client messages (heartbeat/ping)
+            # Wait for client messages (heartbeat/ping, subscriptions, etc.)
             data = await websocket.receive_text()
+            message_data = json.loads(data) if data else {}
 
-            # Handle ping/pong for connection health
-            if data == "ping":
-                await websocket.send_text("pong")
+            # Handle different message types
+            if message_data.get("type") == "ping":
+                await websocket.send_json({"type": "pong", "timestamp": datetime.utcnow().isoformat()})
+
+            elif message_data.get("type") == "subscribe_task":
+                # Subscribe to specific task updates
+                task_id = message_data.get("task_id")
+                await websocket.send_json({
+                    "type": "subscribed",
+                    "target": f"task:{task_id}",
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+
+            elif message_data.get("type") == "subscribe_workflow":
+                # Subscribe to workflow updates
+                job_id = message_data.get("job_id")
+                await websocket.send_json({
+                    "type": "subscribed",
+                    "target": f"workflow:{job_id}",
+                    "timestamp": datetime.utcnow().isoformat()
+                })
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for user {user_id}")

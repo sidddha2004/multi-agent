@@ -79,6 +79,8 @@ services:
     container_name: planner
     ports:
       - "8001:8001"
+    volumes:
+      - shared_utils:/shared
     environment:
       - DATABASE_URL=postgresql://admin:admin123@postgres:5432/secureai
       - SCHEDULER_URL=http://scheduler:8002
@@ -110,6 +112,8 @@ services:
       context: ./result-aggregator
       dockerfile: Dockerfile
     container_name: result-aggregator
+    volumes:
+      - shared_utils:/shared
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - RESULTS_TOPIC=results
@@ -128,6 +132,8 @@ services:
       context: ./research-agent
       dockerfile: Dockerfile
     container_name: research-agent
+    volumes:
+      - shared_utils:/shared
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - TASKS_TOPIC=tasks.research
@@ -316,6 +322,7 @@ volumes:
   zookeeper_data:
   zookeeper_logs:
   kafka_data:
+  shared_utils:
 
 networks:
   default:
