@@ -1,245 +1,335 @@
-# Multi-AI - Distributed AI Agent Platform
+# 🚀 SecureAI - Distributed Multi-Agent AI Platform
 
-A powerful AI orchestration platform that coordinates multiple AI specialists to work together on complex tasks. Think of it as having a project manager that delegates different parts of your request to the best AI assistant for each job.
+> A production-ready distributed AI orchestration platform that coordinates multiple specialized AI agents to solve complex tasks through intelligent planning, task scheduling, and real-time collaboration.
 
-## What Makes Multi-AI Special?
+---
 
-Smart Task Planning - Automatically breaks down your requests into the right steps
-Team Coordination - Routes tasks to the best AI agent for the job
-Full Transparency - Watch your requests get processed in real-time
-Extensible - Easily add new AI specialists to your team
-Production-Ready - Built with enterprise-grade architecture
+## 📖 Overview
 
-## How It Works (The Simple Version)
+SecureAI enables multiple AI agents to collaborate on a single user request.
+
+Instead of relying on one general-purpose model, SecureAI decomposes a complex task into smaller subtasks, assigns them to specialized agents, and streams results back to the user in real time.
+
+---
+
+## 🏗️ System Architecture
+
+> *(Replace with your architecture image)*
+
+<p align="center">
+  <img src="docs/architecture.png" width="1000"/>
+</p>
+
+---
+
+## ✨ Features
+
+### 🤖 Multi-Agent Orchestration
+
+- AI-powered task planning
+- Capability-based agent routing
+- Parallel and sequential workflow execution
+- Dynamic agent discovery
+
+### ⚡ Real-Time Communication
+
+- WebSocket-based live updates
+- Redis Pub/Sub event streaming
+- Task progress monitoring
+
+### 📦 Distributed Architecture
+
+- Kafka message broker
+- Independent microservices
+- Asynchronous task execution
+- Fault-isolated workers
+
+### 🧠 Intelligent Planning
+
+- LLM-powered Planner
+- Automatic task decomposition
+- Multi-step workflow generation
+- Context-aware execution
+
+### 💾 Persistent Memory
+
+- PostgreSQL for structured data
+- Redis for caching and messaging
+- Qdrant vector database for semantic memory
+
+---
+
+# 🏛️ Architecture
 
 ```
-You → "Research quantum computing" → Multi-AI Team → Results!
+                User
+                  │
+         React Frontend
+                  │
+            API Gateway
+                  │
+      ┌───────────┴───────────┐
+      │                       │
+   Planner                PostgreSQL
+      │
+ Task Scheduler
+      │
+     Kafka
+      │
+ ┌────┼────┬────┬────┬────┐
+ │    │    │    │    │
+Research Browser SQL Email Coding
+ Agent   Agent Agent Agent Agent
+      │
+   Redis Pub/Sub
+      │
+  WebSocket Server
+      │
+ React Frontend
 
-Here's what happens behind the scenes:
-
-1. You submit a request through a web interface
-2. My smart planner figures out the best way to tackle it
-3. The scheduler assigns tasks to the right AI specialists
-4. Each agent works on their part (research, browsing, database queries, etc.)
-5. Results come back in real-time while you watch
-6. You get comprehensive, well-organized answers
+Planner
+    │
+Qdrant Vector Memory
 ```
 
-## Current AI Specialists
+---
 
-Research Agent - Deep research and analysis
-Browser Agent - Web scraping and online research
-SQL Agent - Database queries and data analysis
-Email Agent - Email parsing and communication
+# 🧩 Core Components
 
-Coming Soon:
+## API Gateway
 
-Creative Agent - Content generation and editing
-Code Agent - Programming and debugging
-Analytics Agent - Data visualization and insights
+- REST API entry point
+- Authentication & authorization
+- Request validation
+- Service routing
 
-## Quick Start (5 Minutes)
+---
 
-Prerequisites
-Docker and Docker Compose installed
-An OpenAI API key (get one at openai.com)
+## Planner
 
-Step 1: Get the Code
+Responsible for:
+
+- Understanding user intent
+- Task decomposition
+- Workflow generation
+- Agent selection
+
+---
+
+## Scheduler
+
+Responsible for:
+
+- Publishing jobs to Kafka
+- Queue management
+- Retry policies
+- Task prioritization
+
+---
+
+## AI Agents
+
+Each agent performs one specialized responsibility.
+
+| Agent | Responsibility |
+|--------|----------------|
+| 🔍 Research Agent | Deep research and summarization |
+| 🌐 Browser Agent | Web scraping and information retrieval |
+| 🗄 SQL Agent | Database queries |
+| 📧 Email Agent | Email automation |
+| 💻 Coding Agent | Code generation & debugging |
+
+---
+
+## Infrastructure
+
+| Component | Purpose |
+|------------|----------|
+| Kafka | Message Broker |
+| Redis | Pub/Sub + Cache |
+| PostgreSQL | Persistent Storage |
+| Qdrant | Vector Database |
+| Docker | Containerization |
+
+---
+
+# 🛠️ Tech Stack
+
+### Backend
+
+- FastAPI
+- Python
+- SQLAlchemy
+- Pydantic
+
+### Frontend
+
+- React
+- TypeScript
+- Vite
+
+### Databases
+
+- PostgreSQL
+- Redis
+- Qdrant
+
+### Messaging
+
+- Apache Kafka
+- Redis Pub/Sub
+- WebSockets
+
+### DevOps
+
+- Docker
+- Docker Compose
+
+### AI
+
+- OpenAI GPT
+- LangGraph
+- MCP Integration
+
+---
+
+# 📂 Project Structure
+
+```
+secureai/
+│
+├── frontend/
+├── api-gateway/
+├── planner/
+├── scheduler/
+├── research-agent/
+├── browser-agent/
+├── sql-agent/
+├── email-agent/
+├── coding-agent/
+├── websocket/
+├── memory-manager/
+├── qdrant/
+├── docker-compose.yml
+└── README.md
+```
+
+---
+
+# 🚀 Quick Start
+
+### Clone
+
 ```bash
-git clone https://github.com/yourusername/multi-ai.git
-cd multi-ai
+git clone https://github.com/<username>/secureai.git
+cd secureai
 ```
 
-Step 2: Setup Your API Key
+### Configure
+
 ```bash
 cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY=your_key_here
 ```
 
-Step 3: Start Your AI Team
+Add your API keys.
+
+### Start
+
 ```bash
 docker compose up --build
 ```
 
-Step 4: Access the Platform
-Open your browser and go to: http://localhost:3000
+Frontend
 
-That's it! You're now ready to delegate tasks to your AI team.
-
-## What Can You Do?
-
-Example Tasks You Can Try:
-
-Research & Analysis:
-
-"What are the latest developments in quantum computing?"
-"Compare renewable energy storage solutions"
-"Analyze current trends in AI safety research"
-
-Web & Data Exploration:
-
-"Scrape tech news from the past week and summarize key trends"
-"Query our database for customer churn patterns"
-"Extract email addresses from this customer feedback"
-
-Complex Multi-Step Tasks:
-
-"Research the top 5 electric cars, browse their websites for specs,
-and create a comparison table"
-
-## Under the Hood (For the Tech-Curious)
-
-Architecture Overview
 ```
-Your Request → Frontend → API Gateway → Smart Planner → Scheduler →
-Specialized Agents → Kafka Messaging → Results → Real-time Updates → You!
+http://localhost:3000
 ```
 
-The Tech Stack That Makes It Possible
+API
 
-Backend: FastAPI (blazing fast Python web framework)
-Frontend: React (beautiful, responsive UI)
-Messaging: Apache Kafka (reliable task distribution)
-Database: PostgreSQL (robust data storage)
-Caching: Redis (speedy responses)
-AI: OpenAI GPT-4 (powerful language model)
-Containers: Docker (easy deployment)
+```
+http://localhost:8000
+```
 
-Key Components
+---
 
-Smart Planner
-- Analyzes your request using AI
-- Breaks down complex tasks into steps
-- Chooses the right workflow (sequential, parallel, or conditional)
+# 🔄 Request Lifecycle
+
+```
+User
+
+↓
+
+React Frontend
+
+↓
+
+API Gateway
+
+↓
+
+Planner
+
+↓
 
 Scheduler
-- Matches tasks to the best agents
-- Manages queues and priorities
-- Handles retries and error recovery
 
-Agent Registry
-- Dynamic agent registration (no hardcoding!)
-- Capability-based routing
-- Easy to add new agent types
+↓
 
-Result Aggregator
-- Collects results from all agents
-- Provides unified responses
-- Tracks performance metrics
+Kafka
 
-## Testing Your AI Team
+↓
 
-I've included some handy test scripts:
+Specialized Agent
 
-```bash
-# Test the complete workflow
-./test-end-to-end.ps1
+↓
 
-# Test memory capabilities
-python test-memory.py
+Redis Pub/Sub
 
-# Test workflow planning
-python test-langgraph.py
+↓
+
+WebSocket
+
+↓
+
+Frontend
+
+↓
+
+User
 ```
 
-## Monitoring & Debugging
 
-Watch Your AI Team Work
-```bash
-# See all agents working
-docker compose logs -f
 
-# Follow specific agents
-docker compose logs -f research-agent
-docker compose logs -f browser-agent
-```
+# 🎯 Roadmap
 
-Check Agent Health
-```bash
-# View registered agents
-curl http://localhost:8002/agents
-
-# Check Kafka message flow
-docker exec -it kafka kafka-topics --list --bootstrap-server localhost:9092
-```
-
-## Why I Built Multi-AI
-
-The Problem: Most AI tools are limited to single tasks. Need research + browsing + data analysis? You're stuck doing it yourself.
-
-My Solution: A coordinated AI team that works together seamlessly. Think of it as having specialists who collaborate on your project, each bringing their unique expertise.
-
-The Result: Faster, more comprehensive results with less manual effort.
-
-## Contributing
-
-I love contributions! Here are some ways you can help:
-
-Add New Agents - Create specialized AI workers
-Improve Workflows - Make task planning smarter
-Enhance UI - Make the interface more beautiful
-Write Docs - Help others understand the system
-Share Ideas - Tell me what features you'd love
-
-## Learning Resources
-
-Want to understand how it all works?
-
-Check out my code comments (I write them for humans!)
-Run the test scripts to see workflows in action
-Browse the agent code to understand specialist logic
-Study the planner to see task breakdown in action
-
-## Troubleshooting
-
-Common Issues:
-
-"I can't access the frontend!"
-Make sure all containers are running: docker compose ps
-Check frontend logs: docker compose logs frontend
-
-"Tasks are stuck in processing!"
-Check if your OpenAI API key is valid in .env
-View agent logs: docker compose logs research-agent
-Verify Kafka is working: docker compose logs kafka
-
-"I want to add a new agent!"
-Check the existing agent code for templates
-Register your agent in the system
-Add capabilities to the agent registry
-Update the planner to recognize new task types
-
-## Tips for Best Results
-
-1. Be Specific - Clear requests get better results
-2. Break It Down - Complex tasks work well step-by-step
-3. Use Context - Reference previous results for continuity
-4. Monitor Progress - Watch real-time updates to understand processing
-5. Experiment - Try different types of requests to see agent strengths
-
-## License
-
-MIT License - Feel free to use, modify, and distribute!
-
-## Acknowledgments
-
-Built with love by the Multi-AI team
-Powered by amazing open-source technologies
-Inspired by the vision of accessible AI for everyone
+- [x] Multi-agent orchestration
+- [x] Kafka-based messaging
+- [x] Redis Pub/Sub
+- [x] PostgreSQL
+- [x] Qdrant semantic memory
+- [x] WebSocket streaming
+- [ ] Kubernetes deployment
+- [ ] Prometheus & Grafana
+- [ ] OpenTelemetry tracing
+- [ ] CI/CD pipeline
+- [ ] Multi-LLM routing
+- [ ] Auto-scaling workers
 
 ---
 
-Ready to supercharge your productivity with AI?
+# 📄 License
 
-```bash
-docker compose up --build
-```
-
-Open http://localhost:3000 and meet your new AI team!
-
-Questions? Issues? Ideas? I'm here to help!
+MIT License
 
 ---
 
-Built with love by the Multi-AI community
-Making AI accessible, one task at a time
+## ⭐ Highlights
+
+- Distributed microservice architecture
+- Event-driven communication with Kafka
+- Real-time task streaming
+- Vector memory using Qdrant
+- Intelligent LLM task planning
+- Dockerized deployment
+- Modular agent framework
