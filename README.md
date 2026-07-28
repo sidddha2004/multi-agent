@@ -1,4 +1,4 @@
-# 🚀 SecureAI - Distributed Multi-Agent AI Platform
+#  SecureAI - Distributed Multi-Agent AI Platform
 
 > A production-ready distributed AI orchestration platform that coordinates multiple specialized AI agents to solve complex tasks through intelligent planning, task scheduling, and real-time collaboration.
 
@@ -12,9 +12,9 @@ Instead of relying on one general-purpose model, SecureAI decomposes a complex t
 
 ---
 
-## 🏗️ System Architecture
+##  System Architecture
 
-> *(Replace with your architecture image)*
+
 
 <p align="center">
   <img src="docs/architecture.png" width="1000"/>
@@ -24,14 +24,14 @@ Instead of relying on one general-purpose model, SecureAI decomposes a complex t
 
 ## ✨ Features
 
-### 🤖 Multi-Agent Orchestration
+###  Multi-Agent Orchestration
 
 - AI-powered task planning
 - Capability-based agent routing
 - Parallel and sequential workflow execution
 - Dynamic agent discovery
 
-### ⚡ Real-Time Communication
+###  Real-Time Communication
 
 - WebSocket-based live updates
 - Redis Pub/Sub event streaming
@@ -44,7 +44,7 @@ Instead of relying on one general-purpose model, SecureAI decomposes a complex t
 - Asynchronous task execution
 - Fault-isolated workers
 
-### 🧠 Intelligent Planning
+###  Intelligent Planning
 
 - LLM-powered Planner
 - Automatic task decomposition
@@ -216,7 +216,7 @@ secureai/
 
 ---
 
-# 🚀 Quick Start
+#  Quick Start
 
 ### Clone
 
@@ -310,10 +310,6 @@ User
 - [x] Qdrant semantic memory
 - [x] WebSocket streaming
 - [ ] Kubernetes deployment
-- [ ] Prometheus & Grafana
-- [ ] OpenTelemetry tracing
-- [ ] CI/CD pipeline
-- [ ] Multi-LLM routing
 - [ ] Auto-scaling workers
 
 ---
