@@ -37,6 +37,10 @@ function App() {
   }, [token]);
 
   const connectWebSocket = () => {
+    if (process.env.REACT_APP_DISABLE_WS === 'true') {
+      setConnectionStatus('polling');
+      return;
+    }
     setConnectionStatus('connecting');
 
     try {
