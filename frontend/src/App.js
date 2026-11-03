@@ -208,6 +208,60 @@ function AuthScreen({ onAuthed, toast, theme, toggleTheme }) {
   );
 }
 
+const FULL_STACK = [
+  ['API Gateway', 'FastAPI with JWT auth, Redis rate limiting and WebSocket live updates.'],
+  ['Planner', 'LangGraph workflow engine that decomposes a prompt and routes each subtask by agent type.'],
+  ['Kafka bus + Scheduler', 'Subtasks are published to per-agent topics, with retries and a dead-letter queue for failures.'],
+  ['Specialist agents', 'Independent workers: research, SQL (read-only), browser (Selenium) and email, each scaling on its own.'],
+  ['Memory manager', 'Qdrant vector store with embeddings so agents recall earlier findings.'],
+  ['Result aggregator', 'Collects agent results from Kafka and completes the job, streaming progress to the UI.'],
+];
+
+function InfoModal({ onClose }) {
+  useEffect(() => {
+    const h = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+  return (
+    <div className="drawer-wrap center" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="About this demo">
+        <header>
+          <div>
+            <span className="badge processing">Demo build</span>
+            <h3>You are using the lite demo</h3>
+          </div>
+          <button className="ghost icon-btn" onClick={onClose} aria-label="Close">✕</button>
+        </header>
+        <p className="muted modal-lede">
+          This hosted version runs on free tiers: one serverless API, a Postgres database and Gemini 2.5 Flash.
+          The planner, agents and aggregator run in a single request, so there is no live streaming and each job
+          must finish within 60 seconds.
+        </p>
+        <h4 className="sect">How the original system works</h4>
+        <ol className="stack">
+          {FULL_STACK.map(([t, d]) => (
+            <li key={t}><b>{t}</b><span>{d}</span></li>
+          ))}
+        </ol>
+        <p className="muted modal-foot">
+          The full microservice stack (Docker Compose, Kafka, Redis, Postgres, Qdrant) is in the GitHub repo and runs locally or on your own servers.
+        </p>
+        <a className="primary link-btn" href="https://github.com/sidddha2004/multi-agent" target="_blank" rel="noreferrer">View full architecture on GitHub ↗</a>
+      </div>
+    </div>
+  );
+}
+
+function DemoBanner({ onInfo }) {
+  return (
+    <div className="demo-banner">
+      <span><b>Live demo</b> · lite serverless version of SecureAI</span>
+      <button onClick={onInfo}>How the real system works →</button>
+    </div>
+  );
+}
+
 function Pipeline({ stage }) {
   return (
     <ol className="pipeline" aria-live="polite">
@@ -410,6 +464,8 @@ function App() {
 
   const shown = jobs.filter((j) => (filter === 'all' || j.status === filter) && j.prompt.toLowerCase().includes(query.toLowerCase()));
   const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+  const [showInfo, setShowInfo] = useState(false);
+  const infoEls = showInfo ? <InfoModal onClose={() => setShowInfo(false)} /> : null;
 
   const toastEls = (
     <div className="toasts" role="status">
@@ -420,7 +476,9 @@ function App() {
   if (!token) {
     return (
       <>
+        <DemoBanner onInfo={() => setShowInfo(true)} />
         <AuthScreen onAuthed={onAuthed} toast={toast} theme={theme} toggleTheme={toggleTheme} />
+        {infoEls}
         {toastEls}
       </>
     );
@@ -428,6 +486,8 @@ function App() {
 
   return (
     <div className="shell">
+      <DemoBanner onInfo={() => setShowInfo(true)} />
+      {infoEls}
       <header className="topbar">
         <div className="brand"><span className="brand-mark">⛨</span> SecureAI <span className="env">Mission Control</span></div>
         <div className="top-actions">
