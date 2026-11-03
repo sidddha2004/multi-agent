@@ -53,7 +53,7 @@ async def test_memory_health() -> bool:
                 print("✅ Memory Manager Health Check:")
                 print(f"   Status: {health_data.get('status')}")
                 print(f"   Qdrant Connected: {health_data.get('qdrant_connected')}")
-                print(f"   OpenAI Connected: {health_data.get('openai_connected')}")
+                print(f"   OpenAI Connected: {health_data.get('llm_connected')}")
                 if health_data.get('stats'):
                     stats = health_data.get('stats')
                     print(f"   Total Memories: {stats.get('total_memories', 0)}")

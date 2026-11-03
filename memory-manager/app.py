@@ -63,7 +63,7 @@ class MemoryStatsResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     qdrant_connected: bool
-    openai_connected: bool
+    llm_connected: bool
     stats: Optional[Dict[str, Any]] = None
 
 

@@ -1,4 +1,5 @@
 import json
+import re
 import logging
 import os
 import time
@@ -22,7 +23,9 @@ TASKS_TOPIC = os.getenv("TASKS_TOPIC", "tasks.sql")
 RESULTS_TOPIC = os.getenv("RESULTS_TOPIC", "results")
 RETRY_TOPIC = os.getenv("RETRY_TOPIC", "tasks.retry")
 DLQ_TOPIC = os.getenv("DLQ_TOPIC", "tasks.dead_letter")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/secureai")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))  # seconds
@@ -151,11 +154,22 @@ def heartbeat_loop():
         time.sleep(HEARTBEAT_INTERVAL)
 
 
+HIDDEN_TABLES = {"users", "agent_registry"}  # never exposed to the LLM or to generated queries
+MAX_RESULT_ROWS = int(os.getenv("SQL_MAX_ROWS", "100"))
+QUERY_TIMEOUT_MS = int(os.getenv("SQL_TIMEOUT_MS", "5000"))
+_BLOCKED = re.compile(
+    r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|copy|call|do|execute|set|reset|"
+    r"vacuum|lock|listen|notify|into|pg_\w+|lo_\w+|dblink\w*|information_schema|password_hash|"
+    + "|".join(re.escape(t) for t in HIDDEN_TABLES) + r")\b",
+    re.IGNORECASE,
+)
+
+
 def get_database_schema() -> str:
-    """Get database schema information"""
+    """Get database schema information (hidden tables excluded)"""
     try:
         inspector = inspect(engine)
-        tables = inspector.get_table_names()
+        tables = [t for t in inspector.get_table_names() if t not in HIDDEN_TABLES]
 
         schema_info = []
         for table in tables:
@@ -170,23 +184,33 @@ def get_database_schema() -> str:
         return "Unable to retrieve schema"
 
 
+def validate_select_query(query: str) -> str:
+    """Allow exactly one read-only SELECT/WITH statement that avoids sensitive tables and functions"""
+    query = query.strip().rstrip(";").strip()
+    if not re.match(r"(?is)^(select|with)\b", query):
+        raise ValueError("Only SELECT queries are allowed for security")
+    if ";" in query or "--" in query or "/*" in query:
+        raise ValueError("Multiple statements and SQL comments are not allowed")
+    blocked = _BLOCKED.search(query)
+    if blocked:
+        raise ValueError(f"Query uses a disallowed keyword or object: {blocked.group(0)}")
+    return query
+
+
 def execute_safe_query(query: str) -> List[Dict[str, Any]]:
-    """Execute a safe read-only query"""
+    """Execute a validated query inside a read-only transaction with a timeout and row cap"""
     try:
-        # Only allow SELECT queries
-        query = query.strip()
-        if not query.upper().startswith('SELECT'):
-            raise ValueError("Only SELECT queries are allowed for security")
+        query = validate_select_query(query)
 
         with engine.connect() as connection:
-            result = connection.execute(query)
-            columns = result.keys()
-            rows = result.fetchall()
+            connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+            connection.exec_driver_sql(f"SET LOCAL statement_timeout = {QUERY_TIMEOUT_MS}")
+            result = connection.exec_driver_sql(query)
+            columns = list(result.keys())
+            rows = result.fetchmany(MAX_RESULT_ROWS)
+            connection.rollback()
 
-            # Convert to list of dictionaries
-            results = [dict(zip(columns, row)) for row in rows]
-
-            return results
+            return [dict(zip(columns, row)) for row in rows]
 
     except Exception as e:
         logger.error(f"Query execution error: {e}")
@@ -195,18 +219,16 @@ def execute_safe_query(query: str) -> List[Dict[str, Any]]:
 
 def generate_sql_query(description: str, schema: str) -> str:
     """Generate SQL query using LLM"""
-    if not OPENAI_API_KEY:
+    if not GEMINI_API_KEY:
         # Fallback: simple extraction
         if "SELECT" in description.upper():
             return description
         else:
-            return "SELECT 'Please provide OpenAI API key for natural language query generation' as message"
+            return "SELECT 'Please provide Gemini API key for natural language query generation' as message"
 
     try:
         from openai import OpenAI
-        client = OpenAI(
-            api_key=OPENAI_API_KEY
-        )
+        client = OpenAI(api_key=GEMINI_API_KEY, base_url=LLM_BASE_URL)
 
         system_prompt = f"""You are a SQL expert. Convert natural language requests into SQL queries.
 Available schema:\n{schema}
@@ -215,13 +237,14 @@ Return ONLY the SQL query, no explanations. Only SELECT queries are allowed for 
 If the request cannot be fulfilled with a SELECT query, return a helpful message."""
 
         response = client.chat.completions.create(
-            model="gpt-4",
+            model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": description}
             ],
             temperature=0.1,
-            max_tokens=500
+            max_tokens=500,
+            extra_body={"reasoning_effort": "none"}
         )
 
         query = response.choices[0].message.content.strip()

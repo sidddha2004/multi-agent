@@ -18,13 +18,13 @@ The Memory Manager provides long-term memory capabilities for all agents in the 
 ## Architecture
 
 ```
-Agent Execution → OpenAI Embeddings → Qdrant Storage → Vector Search → Context Retrieval → Enhanced Task Processing
+Agent Execution → Gemini Embeddings → Qdrant Storage → Vector Search → Context Retrieval → Enhanced Task Processing
 ```
 
 ## Components
 
 ### 1. Memory Manager (`main.py`)
-Core Qdrant integration with OpenAI embeddings
+Core Qdrant integration with Gemini embeddings
 - Vector storage and retrieval
 - Semantic search functionality
 - Memory lifecycle management
@@ -86,9 +86,9 @@ GET /memory/stats
 QDRANT_URL=http://qdrant:6333
 QDRANT_COLLECTION=secureai_memory
 
-# OpenAI Configuration
-OPENAI_API_KEY=sk-your-key
-EMBEDDING_MODEL=text-embedding-3-small
+# Gemini Configuration
+GEMINI_API_KEY=your-gemini-key
+EMBEDDING_MODEL=gemini-embedding-001
 EMBEDDING_DIMENSION=1536
 
 # Memory Configuration

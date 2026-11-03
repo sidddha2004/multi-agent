@@ -32,7 +32,9 @@ TASKS_TOPIC = os.getenv("TASKS_TOPIC", "tasks.research")
 RESULTS_TOPIC = os.getenv("RESULTS_TOPIC", "results")
 RETRY_TOPIC = os.getenv("RETRY_TOPIC", "tasks.retry")
 DLQ_TOPIC = os.getenv("DLQ_TOPIC", "tasks.dead_letter")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/secureai")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 MEMORY_MANAGER_URL = os.getenv("MEMORY_MANAGER_URL", "http://memory-manager:8005")
@@ -160,7 +162,7 @@ class EnhancedResearchAgent:
             bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
             value_serializer=lambda v: json.dumps(v).encode('utf-8')
         )
-        self.openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        self.openai_client = OpenAI(api_key=GEMINI_API_KEY, base_url=LLM_BASE_URL)
         self.redis_client = redis.from_url(REDIS_URL)
         self.memory = MemoryIntegration()
 
@@ -314,19 +316,20 @@ Provide comprehensive, up-to-date information on the topic."""
 Please provide comprehensive research findings, building upon any previous context mentioned above."""
 
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",
+                model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.7,
-                max_tokens=1500
+                max_tokens=1500,
+                extra_body={"reasoning_effort": "none"}
             )
 
             return response.choices[0].message.content
 
         except Exception as e:
-            logger.error(f"OpenAI research failed: {e}")
+            logger.error(f"Gemini research failed: {e}")
             return f"Research failed: {str(e)}"
 
     async def handle_task_failure(self, task_message: Dict[str, Any], error_message: str):

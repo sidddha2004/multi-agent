@@ -100,7 +100,9 @@ Base = declarative_base()
 
 # External Services
 SCHEDULER_URL = os.getenv("SCHEDULER_URL", "http://scheduler:8002")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 
 # Logging
 logging.basicConfig(level=logging.INFO)

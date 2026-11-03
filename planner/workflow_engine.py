@@ -15,7 +15,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/secureai")
 
 # Logging
@@ -88,7 +90,7 @@ def analyze_prompt(state: WorkflowState) -> WorkflowState:
     try:
         logger.info(f"Analyzing prompt for job {state['job_id']}")
 
-        llm = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4", temperature=0.7)
+        llm = ChatOpenAI(api_key=GEMINI_API_KEY, base_url=LLM_BASE_URL, model=LLM_MODEL, temperature=0.7, extra_body={"reasoning_effort": "none"})
 
         analysis_prompt = f"""Analyze this user request and determine:
 1. What type of workflow is needed (sequential, parallel, conditional, hybrid)
@@ -132,7 +134,7 @@ def create_sequential_workflow(state: WorkflowState) -> WorkflowState:
     try:
         logger.info(f"Creating sequential workflow for job {state['job_id']}")
 
-        llm = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4", temperature=0.7)
+        llm = ChatOpenAI(api_key=GEMINI_API_KEY, base_url=LLM_BASE_URL, model=LLM_MODEL, temperature=0.7, extra_body={"reasoning_effort": "none"})
 
         workflow_prompt = f"""Create a sequential workflow for this request.
 Break it down into 3-5 specific steps that should be executed in order.
@@ -170,7 +172,7 @@ def create_parallel_workflow(state: WorkflowState) -> WorkflowState:
     try:
         logger.info(f"Creating parallel workflow for job {state['job_id']}")
 
-        llm = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4", temperature=0.7)
+        llm = ChatOpenAI(api_key=GEMINI_API_KEY, base_url=LLM_BASE_URL, model=LLM_MODEL, temperature=0.7, extra_body={"reasoning_effort": "none"})
 
         workflow_prompt = f"""Create a parallel workflow for this request.
 Break it down into 2-4 independent tasks that can be executed simultaneously.
@@ -208,7 +210,7 @@ def create_conditional_workflow(state: WorkflowState) -> WorkflowState:
     try:
         logger.info(f"Creating conditional workflow for job {state['job_id']}")
 
-        llm = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4", temperature=0.7)
+        llm = ChatOpenAI(api_key=GEMINI_API_KEY, base_url=LLM_BASE_URL, model=LLM_MODEL, temperature=0.7, extra_body={"reasoning_effort": "none"})
 
         workflow_prompt = f"""Create a conditional workflow for this request.
 Define branches based on different conditions or outcomes.

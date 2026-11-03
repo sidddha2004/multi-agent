@@ -23,7 +23,9 @@ TASKS_TOPIC = os.getenv("TASKS_TOPIC", "tasks.email")
 RESULTS_TOPIC = os.getenv("RESULTS_TOPIC", "results")
 RETRY_TOPIC = os.getenv("RETRY_TOPIC", "tasks.retry")
 DLQ_TOPIC = os.getenv("DLQ_TOPIC", "tasks.dead_letter")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/secureai")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))  # seconds
@@ -161,7 +163,7 @@ def heartbeat_loop():
 
 def parse_email_request(description: str) -> Dict[str, Any]:
     """Parse email request using LLM or regex"""
-    if not OPENAI_API_KEY:
+    if not GEMINI_API_KEY:
         # Simple regex-based parsing
         email_pattern = r'[\w\.-]+@[\w\.-]+\.\w+'
         emails = re.findall(email_pattern, description)
@@ -175,9 +177,7 @@ def parse_email_request(description: str) -> Dict[str, Any]:
 
     try:
         from openai import OpenAI
-        client = OpenAI(
-            api_key=OPENAI_API_KEY
-        )
+        client = OpenAI(api_key=GEMINI_API_KEY, base_url=LLM_BASE_URL)
 
         system_prompt = """Extract email details from the user request.
 Return JSON format:
@@ -189,14 +189,15 @@ Return JSON format:
 """
 
         response = client.chat.completions.create(
-            model="gpt-4",
+            model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": description}
             ],
             response_format={"type": "json_object"},
             temperature=0.3,
-            max_tokens=500
+            max_tokens=500,
+            extra_body={"reasoning_effort": "none"}
         )
 
         result = json.loads(response.choices[0].message.content)

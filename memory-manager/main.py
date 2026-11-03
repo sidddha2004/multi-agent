@@ -26,14 +26,16 @@ load_dotenv()
 # Configuration
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "secureai_memory")
 
 # Memory configuration
 MEMORY_EXPIRY_DAYS = int(os.getenv("MEMORY_EXPIRY_DAYS", "30"))  # Default 30 days
 MAX_MEMORY_RESULTS = int(os.getenv("MAX_MEMORY_RESULTS", "10"))
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "1536"))  # OpenAI small embedding dimension
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
+EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "1536"))  # Gemini embeddings support 768/1536/3072 via dimensions
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -60,7 +62,7 @@ class QdrantMemoryManager:
                 )
 
             # Initialize OpenAI client
-            self.openai_client = OpenAI(api_key=OPENAI_API_KEY)
+            self.openai_client = OpenAI(api_key=GEMINI_API_KEY, base_url=LLM_BASE_URL)
 
             # Create collection if it doesn't exist
             self._ensure_collection_exists()
@@ -103,6 +105,7 @@ class QdrantMemoryManager:
             response = self.openai_client.embeddings.create(
                 model=EMBEDDING_MODEL,
                 input=text,
+                dimensions=EMBEDDING_DIMENSION,
                 encoding_format="float"
             )
             return response.data[0].embedding
@@ -371,7 +374,7 @@ def health_check() -> Dict[str, Any]:
         return {
             "status": "healthy",
             "qdrant_connected": True,
-            "openai_connected": True,
+            "llm_connected": True,
             "stats": stats
         }
     except Exception as e:
@@ -379,7 +382,7 @@ def health_check() -> Dict[str, Any]:
             "status": "unhealthy",
             "error": str(e),
             "qdrant_connected": False,
-            "openai_connected": False
+            "llm_connected": False
         }
 
 

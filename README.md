@@ -187,7 +187,7 @@ Each agent performs one specialized responsibility.
 
 ### AI
 
-- OpenAI GPT
+- Google Gemini 2.5 Flash (OpenAI-compatible endpoint)
 - LangGraph
 - MCP Integration
 

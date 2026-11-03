@@ -33,7 +33,9 @@ TASKS_TOPIC = os.getenv("TASKS_TOPIC", "tasks.research")
 RESULTS_TOPIC = os.getenv("RESULTS_TOPIC", "results")
 RETRY_TOPIC = os.getenv("RETRY_TOPIC", "tasks.retry")
 DLQ_TOPIC = os.getenv("DLQ_TOPIC", "tasks.dead_letter")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/secureai")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 SCHEDULER_URL = os.getenv("SCHEDULER_URL", "http://scheduler:8002")
@@ -226,8 +228,8 @@ def cache_result(query_hash: str, result: str, ttl_seconds: int = 900):
 
 def process_with_llm(description: str) -> str:
     """Process task with LLM and caching"""
-    if not OPENAI_API_KEY:
-        return f"Processed (no OpenAI API key): {description}"
+    if not GEMINI_API_KEY:
+        return f"Processed (no Gemini API key): {description}"
 
     # Check cache first
     query_hash = get_query_hash(description)
@@ -236,21 +238,20 @@ def process_with_llm(description: str) -> str:
         return cached_result
 
     try:
-        client = OpenAI(
-            api_key=OPENAI_API_KEY
-        )
+        client = OpenAI(api_key=GEMINI_API_KEY, base_url=LLM_BASE_URL)
 
         system_prompt = """You are a helpful AI assistant. Process the given task and provide a helpful, accurate response.
 Be concise but thorough. If the task requires research or analysis, provide well-structured findings."""
 
         response = client.chat.completions.create(
-            model="gpt-4",
+            model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": description}
             ],
             temperature=0.7,
-            max_tokens=1000
+            max_tokens=1000,
+            extra_body={"reasoning_effort": "none"}
         )
 
         result = response.choices[0].message.content

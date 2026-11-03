@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status, Request
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status, Request, Query
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,33 +38,36 @@ redis_client = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"))
 RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "100"))  # requests per window
 RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))  # seconds
 
+TRUST_PROXY = os.getenv("TRUST_PROXY", "false").lower() == "true"
+
 def get_client_ip(request: Request) -> str:
-    """Get client IP address from request"""
-    if "X-Forwarded-For" in request.headers:
+    """Get client IP; X-Forwarded-For is only honoured behind a trusted proxy (spoofable otherwise)"""
+    if TRUST_PROXY and "X-Forwarded-For" in request.headers:
         return request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 async def check_rate_limit_enhanced(identifier: str, max_requests: int = None, window: int = None) -> tuple[bool, int]:
-    """Enhanced rate limiting with Redis - returns (allowed, remaining_requests)"""
+    """Fixed-window rate limit using an atomic Redis INCR - returns (allowed, remaining_requests)"""
     max_requests = max_requests or RATE_LIMIT_MAX_REQUESTS
     window = window or RATE_LIMIT_WINDOW
 
     key = f"rate_limit:{identifier}"
     try:
-        current = redis_client.get(key)
-        if current is None:
-            redis_client.setex(key, window, 1)
-            return True, max_requests - 1
-
-        requests = int(current)
-        if requests >= max_requests:
+        pipe = redis_client.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, window, nx=True)
+        count = int(pipe.execute()[0])
+        if count > max_requests:
             return False, 0
-
-        redis_client.incr(key)
-        return True, max_requests - requests - 1
+        return True, max_requests - count
     except Exception as e:
         logger.error(f"Rate limit error: {e}")
         return True, max_requests  # Fail open
+
+async def check_rate_limit(identifier: str, max_requests: int = None, window: int = None) -> bool:
+    """Boolean wrapper used by per-user limits"""
+    allowed, _ = await check_rate_limit_enhanced(identifier, max_requests, window)
+    return allowed
 
 async def rate_limit_middleware(request: Request, call_next):
     """Rate limiting middleware"""
@@ -99,7 +102,9 @@ async def rate_limit_middleware(request: Request, call_next):
     return response
 
 # JWT Config
-JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
+JWT_SECRET = os.getenv("JWT_SECRET", "")
+if len(JWT_SECRET) < 32 or JWT_SECRET == "your-secret-key-change-in-production":
+    raise RuntimeError("JWT_SECRET must be set to a random value of at least 32 characters")
 JWT_ALGORITHM = "HS256"
 
 # External Services
@@ -196,14 +201,16 @@ class ConnectionManager:
 
     async def pubsub_listener(self):
         """Listen for Redis pub/sub messages and broadcast to WebSocket clients"""
-        try:
-            while True:
-                message = self.redis_pubsub.get_message(timeout=1.0)
+        while True:
+            try:
+                message = self.redis_pubsub.get_message(ignore_subscribe_messages=True, timeout=0)
                 if message and message['type'] == 'message':
                     await self.handle_redis_message(message)
-                await asyncio.sleep(0.01)
-        except Exception as e:
-            logger.error(f"PubSub listener error: {e}")
+                else:
+                    await asyncio.sleep(0.05)
+            except Exception as e:
+                logger.error(f"PubSub listener error: {e}")
+                await asyncio.sleep(1)
 
     async def handle_redis_message(self, message: dict):
         """Handle incoming Redis pub/sub message"""
@@ -264,12 +271,12 @@ manager = ConnectionManager()
 # Pydantic Schemas
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=8, max_length=72)
     name: Optional[str] = None
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., max_length=72)
 
 class TaskRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=5000)
@@ -293,10 +300,10 @@ app.middleware("http")(rate_limit_middleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()],
+    allow_credentials=False,  # auth uses Authorization bearer tokens, not cookies
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Security
@@ -345,6 +352,8 @@ def health():
 @app.post("/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(user_data: RegisterRequest, db: Session = Depends(get_db)):
     """Register new user"""
+    if len(user_data.password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=400, detail="Password must be at most 72 bytes")
     existing = db.query(User).filter(User.email == user_data.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -359,6 +368,8 @@ async def register(user_data: RegisterRequest, db: Session = Depends(get_db)):
 async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
     """Login and return JWT token"""
     user = db.query(User).filter(User.email == login_data.email).first()
+    if len(login_data.password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
     if not user or not bcrypt.checkpw(login_data.password.encode('utf-8'), user.password_hash.encode('utf-8')):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     access_token = create_access_token(user.id)
@@ -408,7 +419,8 @@ async def create_job(
     except Exception as e:
         job.status = "failed"
         db.commit()
-        raise HTTPException(status_code=503, detail=f"Failed to connect to planner: {str(e)}")
+        logger.error(f"Planner request failed for job {job.id}: {e}")
+        raise HTTPException(status_code=503, detail="Planner service unavailable")
 
     # Send WebSocket update
     await manager.send_update(current_user.id, {
@@ -470,8 +482,8 @@ async def get_job_status(
 async def list_jobs(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    skip: int = 0,
-    limit: int = 10
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100)
 ):
     """List user's jobs"""
     jobs = db.query(Job).filter(Job.user_id == current_user.id).order_by(Job.created_at.desc()).offset(skip).limit(limit).all()
@@ -487,7 +499,7 @@ async def list_jobs(
             }
             for job in jobs
         ],
-        "total": len(jobs)
+        "total": db.query(Job).filter(Job.user_id == current_user.id).count()
     }
 
 @app.get("/api/tasks/{job_id}")
@@ -503,8 +515,8 @@ async def get_task_status(
 async def list_tasks(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    skip: int = 0,
-    limit: int = 10
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100)
 ):
     """List user's tasks (alias for /api/jobs)"""
     result = await list_jobs(current_user, db, skip, limit)
@@ -548,7 +560,13 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
         while True:
             # Wait for client messages (heartbeat/ping, subscriptions, etc.)
             data = await websocket.receive_text()
-            message_data = json.loads(data) if data else {}
+            try:
+                message_data = json.loads(data) if data else {}
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "message": "Invalid JSON"})
+                continue
+            if not isinstance(message_data, dict):
+                continue
 
             # Handle different message types
             if message_data.get("type") == "ping":

@@ -16,7 +16,7 @@ function App() {
   const [token, setToken] = useState(localStorage.getItem('token'));
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
-  const API_BASE_URL = 'http://localhost:8000';
+  const API_BASE_URL = (process.env.REACT_APP_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
   // WebSocket connection
   useEffect(() => {
@@ -40,7 +40,7 @@ function App() {
     setConnectionStatus('connecting');
 
     try {
-      const ws = new WebSocket(`ws://localhost:8000/ws?token=${token}`);
+      const ws = new WebSocket(`${API_BASE_URL.replace(/^http/, 'ws')}/ws?token=${encodeURIComponent(token)}`);
       wsRef.current = ws;
 
       ws.onopen = () => {

@@ -27,7 +27,9 @@ TASKS_TOPIC = os.getenv("TASKS_TOPIC", "tasks.browser")
 RESULTS_TOPIC = os.getenv("RESULTS_TOPIC", "results")
 RETRY_TOPIC = os.getenv("RETRY_TOPIC", "tasks.retry")
 DLQ_TOPIC = os.getenv("DLQ_TOPIC", "tasks.dead_letter")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin123@postgres:5432/secureai")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))  # seconds
@@ -158,26 +160,25 @@ def heartbeat_loop():
 
 def process_with_llm(description: str) -> str:
     """Process task with LLM for interpretation"""
-    if not OPENAI_API_KEY:
+    if not GEMINI_API_KEY:
         return description  # Return as-is if no API key
 
     try:
         from openai import OpenAI
-        client = OpenAI(
-            api_key=OPENAI_API_KEY
-        )
+        client = OpenAI(api_key=GEMINI_API_KEY, base_url=LLM_BASE_URL)
 
         system_prompt = """You are a browser automation specialist. Extract the key information needed for web scraping from the user request.
 Return the main URL to visit and what to extract/analyze."""
 
         response = client.chat.completions.create(
-            model="gpt-4",
+            model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": description}
             ],
             temperature=0.3,
-            max_tokens=500
+            max_tokens=500,
+            extra_body={"reasoning_effort": "none"}
         )
 
         return response.choices[0].message.content
@@ -187,8 +188,26 @@ Return the main URL to visit and what to extract/analyze."""
         return description
 
 
+def is_public_http_url(url: str) -> bool:
+    """SSRF guard: only http(s) URLs whose host resolves exclusively to public IP addresses"""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except socket.gaierror:
+        return False
+    return all(ipaddress.ip_address(info[4][0]).is_global for info in infos)
+
+
 def scrape_with_selenium(url: str) -> str:
     """Scrape website using Selenium"""
+    if not is_public_http_url(url):
+        return f"Refused to visit {url}: only public http(s) URLs are allowed"
     try:
         chrome_options = Options()
         chrome_options.add_argument('--headless')
