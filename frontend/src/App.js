@@ -1,697 +1,520 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import './App.css';
 
-function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isLogin, setIsLogin] = useState(true);
-  const [username, setUsername] = useState('');
+const API = (process.env.REACT_APP_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+
+const AGENTS = {
+  research: { label: 'Research', glyph: '◎', hue: 'var(--c-research)' },
+  analysis: { label: 'Analysis', glyph: '△', hue: 'var(--c-analysis)' },
+  writing: { label: 'Writing', glyph: '✎', hue: 'var(--c-writing)' },
+};
+const agentOf = (t) => AGENTS[t] || { label: t || 'Agent', glyph: '◇', hue: 'var(--c-research)' };
+
+const EXAMPLES = [
+  'Compare PostgreSQL and MongoDB for a fintech startup',
+  'Draft a launch announcement for an AI security product',
+  'Analyse the pros and cons of microservices vs a monolith',
+  'Explain zero-trust architecture and give a rollout checklist',
+];
+
+const STAGES = [
+  { key: 'plan', label: 'Planner', hint: 'Splitting request into subtasks' },
+  { key: 'agents', label: 'Agents', hint: 'Specialists working in sequence' },
+  { key: 'merge', label: 'Aggregator', hint: 'Merging outputs into one answer' },
+  { key: 'done', label: 'Delivered', hint: 'Stored in your history' },
+];
+
+/* ---------- tiny safe markdown renderer (React elements only, no innerHTML) ---------- */
+function inline(text, keyBase) {
+  const out = [];
+  const re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let last = 0;
+  let m;
+  let i = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    const tok = m[0];
+    if (tok.startsWith('**')) out.push(<strong key={`${keyBase}-${i++}`}>{tok.slice(2, -2)}</strong>);
+    else out.push(<code key={`${keyBase}-${i++}`}>{tok.slice(1, -1)}</code>);
+    last = m.index + tok.length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+const LIST_RE = /^\s*([-*•]|\d+\.)\s/;
+
+function Markdown({ text }) {
+  const blocks = [];
+  const lines = String(text || '').split('\n');
+  let i = 0;
+  let k = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim().startsWith('```')) {
+      const buf = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) buf.push(lines[i++]);
+      i++;
+      blocks.push(<pre key={k++}><code>{buf.join('\n')}</code></pre>);
+    } else if (/^#{1,4}\s/.test(line)) {
+      const lvl = Math.min(line.match(/^#+/)[0].length + 2, 6);
+      const Tag = `h${lvl}`;
+      blocks.push(<Tag key={k++}>{inline(line.replace(/^#+\s/, ''), k)}</Tag>);
+      i++;
+    } else if (LIST_RE.test(line)) {
+      const ordered = /^\s*\d+\./.test(line);
+      const items = [];
+      while (i < lines.length && LIST_RE.test(lines[i])) {
+        items.push(lines[i].replace(LIST_RE, ''));
+        i++;
+      }
+      const L = ordered ? 'ol' : 'ul';
+      blocks.push(<L key={k++}>{items.map((it, j) => <li key={j}>{inline(it, `${k}-${j}`)}</li>)}</L>);
+    } else if (line.trim() === '') {
+      i++;
+    } else {
+      const buf = [];
+      while (i < lines.length && lines[i].trim() !== '' && !/^(#{1,4}\s|```)/.test(lines[i]) && !LIST_RE.test(lines[i])) buf.push(lines[i++]);
+      blocks.push(<p key={k++}>{inline(buf.join(' '), k)}</p>);
+    }
+  }
+  return <div className="md">{blocks}</div>;
+}
+
+/* ---------- helpers ---------- */
+function timeAgo(ts) {
+  if (!ts) return '';
+  const s = Math.max(0, Math.floor((Date.now() - new Date(ts).getTime()) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function download(name, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function jobToMarkdown(job) {
+  const parts = [`# ${job.prompt}`, '', `Trace: ${job.trace_id}  `, `Status: ${job.status}`, ''];
+  if (job.summary) parts.push('## Final answer', '', job.summary, '');
+  (job.tasks || []).forEach((t, i) => {
+    parts.push(`## Task ${i + 1} · ${agentOf(t.agent_type).label}`, '', `*${t.description}*`, '', t.result || '', '');
+  });
+  return parts.join('\n');
+}
+
+/* ---------- components ---------- */
+function NetworkArt() {
+  const links = [[200, 150, 80, 60], [200, 150, 320, 70], [200, 150, 90, 240], [200, 150, 310, 235], [80, 60, 320, 70], [90, 240, 310, 235], [80, 60, 90, 240], [320, 70, 310, 235]];
+  const nodes = [[80, 60, '◎'], [320, 70, '△'], [90, 240, '✎'], [310, 235, '⛨']];
+  return (
+    <svg className="net" viewBox="0 0 400 300" aria-hidden="true">
+      <defs>
+        <radialGradient id="glow"><stop offset="0%" stopColor="var(--accent)" stopOpacity=".9" /><stop offset="100%" stopColor="var(--accent)" stopOpacity="0" /></radialGradient>
+      </defs>
+      {links.map((l, i) => (
+        <line key={i} x1={l[0]} y1={l[1]} x2={l[2]} y2={l[3]} className="net-line" style={{ animationDelay: `${i * 0.3}s` }} />
+      ))}
+      <circle cx="200" cy="150" r="46" fill="url(#glow)" className="net-pulse" />
+      <circle cx="200" cy="150" r="12" className="net-core" />
+      {nodes.map((n, i) => (
+        <g key={i} className="net-node" style={{ animationDelay: `${i * 0.5}s` }}>
+          <circle cx={n[0]} cy={n[1]} r="22" />
+          <text x={n[0]} y={n[1] + 6} textAnchor="middle">{n[2]}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+function AuthScreen({ onAuthed, toast, theme, toggleTheme }) {
+  const [mode, setMode] = useState('login');
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
-  const [taskPrompt, setTaskPrompt] = useState('');
-  const [tasks, setTasks] = useState([]);
-  const [connectionStatus, setConnectionStatus] = useState('disconnected');
-  const [message, setMessage] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [selectedTask, setSelectedTask] = useState(null);
-  const [showResultsModal, setShowResultsModal] = useState(false);
-  const [token, setToken] = useState(localStorage.getItem('token'));
-  const wsRef = useRef(null);
-  const reconnectTimeoutRef = useRef(null);
-  const API_BASE_URL = (process.env.REACT_APP_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
-  // WebSocket connection
-  useEffect(() => {
-    if (token) {
-      setIsAuthenticated(true);
-      connectWebSocket();
-      fetchTasks();
-
-      return () => {
-        if (wsRef.current) {
-          wsRef.current.close();
-        }
-        if (reconnectTimeoutRef.current) {
-          clearTimeout(reconnectTimeoutRef.current);
-        }
-      };
-    }
-  }, [token]);
-
-  const connectWebSocket = () => {
-    if (process.env.REACT_APP_DISABLE_WS === 'true') {
-      setConnectionStatus('polling');
-      return;
-    }
-    setConnectionStatus('connecting');
-
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
     try {
-      const ws = new WebSocket(`${API_BASE_URL.replace(/^http/, 'ws')}/ws?token=${encodeURIComponent(token)}`);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        setConnectionStatus('connected');
-        console.log('WebSocket connected');
-      };
-
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        console.log('WebSocket message received:', data);
-
-        if (data.type === 'task_update') {
-          setTasks(prevTasks => {
-            const existingIndex = prevTasks.findIndex(t => t.trace_id === data.trace_id);
-            if (existingIndex !== -1) {
-              const updatedTasks = [...prevTasks];
-              updatedTasks[existingIndex] = data;
-              return updatedTasks;
-            } else {
-              return [data, ...prevTasks];
-            }
-          });
-
-          // Show notification for completed tasks
-          if (data.status === 'completed' || data.status === 'failed') {
-            showNotification(data);
-          }
-        } else if (data.type === 'error') {
-          showNotification({ ...data, title: 'Error' });
-        } else if (data.type === 'pong') {
-          // Handle pong response
-        }
-      };
-
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setConnectionStatus('error');
-      };
-
-      ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        setConnectionStatus('disconnected');
-
-        // Attempt to reconnect after 5 seconds
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (isAuthenticated) {
-            connectWebSocket();
-          }
-        }, 5000);
-      };
-
-      // Send periodic ping to keep connection alive
-      const pingInterval = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'ping' }));
-        } else {
-          clearInterval(pingInterval);
-        }
-      }, 30000);
-
-      ws.onclose = () => clearInterval(pingInterval);
-
-    } catch (error) {
-      console.error('WebSocket connection error:', error);
-      setConnectionStatus('error');
-    }
-  };
-
-  const showNotification = (task) => {
-    if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification(`Task ${task.status}`, {
-        body: task.description || task.message,
-        icon: '/logo192.png'
+      if (mode === 'register') {
+        const r = await fetch(`${API}/auth/register`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, name: name || email.split('@')[0] }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : 'Could not create account (check email and 8+ char password)');
+        toast('Account created. Signing you in…', 'ok');
+      }
+      const r = await fetch(`${API}/auth/login`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
       });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : 'Login failed');
+      onAuthed(d.access_token, email);
+    } catch (err) {
+      setError(err.message === 'Failed to fetch' ? 'Network error. Is the API reachable?' : err.message);
+    } finally {
+      setBusy(false);
     }
   };
 
-  // Request notification permission on mount
+  return (
+    <div className="auth">
+      <section className="auth-hero">
+        <div className="brand"><span className="brand-mark">⛨</span> SecureAI</div>
+        <NetworkArt />
+        <h1>One prompt.<br />A team of AI agents.</h1>
+        <p className="lede">Planner, specialist agents and an aggregator turn a single request into a verified, stored answer, powered by Gemini 2.5 Flash.</p>
+        <ul className="feature-list">
+          <li><b>Planner</b> splits work into focused subtasks</li>
+          <li><b>Specialists</b> for research, analysis and writing</li>
+          <li><b>Aggregator</b> merges everything into one answer</li>
+          <li><b>Private history</b> with export and full traceability</li>
+        </ul>
+      </section>
+      <section className="auth-panel">
+        <button className="ghost icon-btn theme-fab" onClick={toggleTheme} aria-label="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
+        <form className="auth-card" onSubmit={submit}>
+          <h2>{mode === 'login' ? 'Welcome back' : 'Create your workspace'}</h2>
+          <p className="muted">{mode === 'login' ? 'Sign in to your mission control.' : 'Free to use. No card required.'}</p>
+          {mode === 'register' && (
+            <label>Name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ada Lovelace" maxLength={100} /></label>
+          )}
+          <label>Email<input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" autoComplete="email" /></label>
+          <label>Password<input type="password" required minLength={8} maxLength={72} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></label>
+          {error && <div className="form-error" role="alert">{error}</div>}
+          <button className="primary wide" disabled={busy}>{busy ? 'Working…' : mode === 'login' ? 'Sign in' : 'Create account'}</button>
+          <p className="switch">
+            {mode === 'login' ? 'New here?' : 'Already registered?'}{' '}
+            <button type="button" className="link" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}>
+              {mode === 'login' ? 'Create an account' : 'Sign in'}
+            </button>
+          </p>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function Pipeline({ stage }) {
+  return (
+    <ol className="pipeline" aria-live="polite">
+      {STAGES.map((s, i) => {
+        const state = i < stage ? 'done' : i === stage ? 'active' : 'idle';
+        return (
+          <li key={s.key} className={`pstep ${state}`}>
+            <span className="pdot">{state === 'done' ? '✓' : i + 1}</span>
+            <span className="ptext"><b>{s.label}</b><small>{s.hint}</small></span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function Drawer({ job, onClose, onDelete, toast }) {
   useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
+    const h = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+  if (!job) return null;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(job.summary || (job.tasks || []).map((t) => t.result).join('\n\n'));
+      toast('Copied to clipboard', 'ok');
+    } catch {
+      toast('Copy failed', 'err');
     }
+  };
+  const tasks = job.tasks || [];
+  return (
+    <div className="drawer-wrap" onClick={onClose}>
+      <aside className="drawer" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Job result">
+        <header>
+          <div>
+            <span className={`badge ${job.status}`}>{job.status}</span>
+            <h3>{job.prompt}</h3>
+            <small className="mono muted">trace {job.trace_id}</small>
+          </div>
+          <button className="ghost icon-btn" onClick={onClose} aria-label="Close">✕</button>
+        </header>
+        <div className="drawer-actions">
+          <button className="ghost" onClick={copy}>Copy answer</button>
+          <button className="ghost" onClick={() => download(`secureai-job-${job.job_id}.md`, jobToMarkdown(job))}>Export .md</button>
+          <button className="ghost danger" onClick={() => onDelete(job.job_id)}>Delete</button>
+        </div>
+        <div className="drawer-body">
+          {job.summary && (
+            <section className="answer">
+              <h4>Final answer</h4>
+              <Markdown text={job.summary} />
+            </section>
+          )}
+          <h4 className="sect">Agent trace · {tasks.length} task{tasks.length === 1 ? '' : 's'}</h4>
+          {tasks.map((t, i) => {
+            const a = agentOf(t.agent_type);
+            return (
+              <article className="trace" key={t.task_id} style={{ '--hue': a.hue }}>
+                <div className="trace-head">
+                  <span className="agent-chip"><span>{a.glyph}</span>{a.label} agent</span>
+                  <span className={`badge ${t.status}`}>{t.status}</span>
+                </div>
+                <p className="trace-desc">{i + 1}. {t.description}</p>
+                <Markdown text={t.result} />
+              </article>
+            );
+          })}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function App() {
+  const [token, setToken] = useState(() => localStorage.getItem('token'));
+  const [email, setEmail] = useState(() => localStorage.getItem('email') || '');
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  const [jobs, setJobs] = useState([]);
+  const [prompt, setPrompt] = useState('');
+  const [stage, setStage] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const [loadingJobs, setLoadingJobs] = useState(false);
+  const [detail, setDetail] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [query, setQuery] = useState('');
+  const [toasts, setToasts] = useState([]);
+  const timers = useRef([]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toast = useCallback((text, kind = 'ok') => {
+    const id = Math.random().toString(36).slice(2);
+    setToasts((t) => [...t, { id, text, kind }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4500);
   }, []);
 
-  const fetchTasks = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/api/jobs`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const data = await response.json();
-      setTasks(data.jobs || []);
-    } catch (error) {
-      console.error('Failed to fetch tasks:', error);
-      showMessage('Failed to load tasks', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchTaskDetails = async (jobId) => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const data = await response.json();
-      setSelectedTask(data);
-      setShowResultsModal(true);
-    } catch (error) {
-      console.error('Failed to fetch task details:', error);
-      showMessage('Failed to load task details', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAuth = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-
-    try {
-      const endpoint = isLogin ? '/auth/login' : '/auth/register';
-      const payload = isLogin
-        ? { email: username, password }
-        : { email: username, password, name: username };
-
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        if (isLogin) {
-          // Store the JWT token
-          localStorage.setItem('token', data.access_token);
-          setIsAuthenticated(true);
-          showMessage('Login successful!', 'success');
-        } else {
-          // Registration successful, switch to login
-          showMessage('Registration successful! Please login.', 'success');
-          setIsLogin(true);
-        }
-      } else {
-        showMessage(data.detail || 'Authentication failed', 'error');
-      }
-    } catch (error) {
-      showMessage('Network error. Please try again.', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSubmitTask = async (e) => {
-    e.preventDefault();
-    if (!taskPrompt.trim()) {
-      showMessage('Please enter a task description', 'error');
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/jobs`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          prompt: taskPrompt
-        })
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setTaskPrompt('');
-        showMessage(`Task submitted! Job ID: ${data.job_id} | Trace ID: ${data.trace_id}`, 'success');
-        fetchTasks(); // Refresh tasks list
-      } else {
-        showMessage(data.detail || 'Failed to submit task', 'error');
-      }
-    } catch (error) {
-      showMessage('Network error. Please try again.', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLogout = () => {
+  const logout = useCallback((msg) => {
     localStorage.removeItem('token');
     setToken(null);
-    setIsAuthenticated(false);
-    setTasks([]);
-    setTaskPrompt('');
-    if (wsRef.current) {
-      wsRef.current.close();
+    setJobs([]);
+    setDetail(null);
+    if (msg) toast(msg, 'err');
+  }, [toast]);
+
+  const api = useCallback(async (path, opts = {}) => {
+    const r = await fetch(`${API}${path}`, {
+      ...opts,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(opts.headers || {}) },
+    });
+    if (r.status === 401) {
+      logout('Session expired. Please sign in again.');
+      throw new Error('unauthorized');
     }
-    showMessage('Logged out successfully', 'success');
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `Request failed (${r.status})`);
+    return data;
+  }, [token, logout]);
+
+  const loadJobs = useCallback(async () => {
+    setLoadingJobs(true);
+    try {
+      const d = await api('/api/jobs?limit=100');
+      setJobs(d.jobs || []);
+    } catch (e) {
+      if (e.message !== 'unauthorized') toast('Could not load history', 'err');
+    } finally {
+      setLoadingJobs(false);
+    }
+  }, [api, toast]);
+
+  useEffect(() => { if (token) loadJobs(); }, [token, loadJobs]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+
+  const onAuthed = (tok, mail) => {
+    localStorage.setItem('token', tok);
+    localStorage.setItem('email', mail);
+    setToken(tok);
+    setEmail(mail);
+    toast('Signed in', 'ok');
   };
 
-  const showMessage = (text, type) => {
-    setMessage({ text, type });
-    setTimeout(() => setMessage(null), 5000);
+  const run = async (e) => {
+    if (e) e.preventDefault();
+    const text = prompt.trim();
+    if (!text || running) return;
+    setRunning(true);
+    setStage(0);
+    timers.current.forEach(clearTimeout);
+    timers.current = [setTimeout(() => setStage(1), 2200), setTimeout(() => setStage(2), 9000)];
+    try {
+      const res = await api('/api/jobs', { method: 'POST', body: JSON.stringify({ prompt: text }) });
+      timers.current.forEach(clearTimeout);
+      setStage(3);
+      setPrompt('');
+      await loadJobs();
+      const full = await api(`/api/jobs/${res.job_id}`);
+      setDetail(full);
+      toast(res.status === 'completed' ? 'Mission complete' : 'Finished with errors', res.status === 'completed' ? 'ok' : 'err');
+    } catch (err) {
+      timers.current.forEach(clearTimeout);
+      setStage(-1);
+      if (err.message !== 'unauthorized') toast(err.message === 'Failed to fetch' ? 'Network error' : err.message, 'err');
+    } finally {
+      setRunning(false);
+      setTimeout(() => setStage(-1), 2500);
+    }
   };
 
-  const getTaskIcon = (agentType) => {
-    const icons = {
-      'research': '🔬',
-      'browser': '🌐',
-      'email': '📧',
-      'sql': '🗄️',
-      'default': '🤖'
-    };
-    return icons[agentType] || icons.default;
+  const openJob = async (id) => {
+    try {
+      setDetail(await api(`/api/jobs/${id}`));
+    } catch (e) {
+      if (e.message !== 'unauthorized') toast('Could not open job', 'err');
+    }
   };
 
-  const getStatusInfo = (status) => {
-    const statusMap = {
-      'pending': { color: 'pending', icon: '⏳', label: 'Pending' },
-      'processing': { color: 'processing', icon: '⚙️', label: 'Processing' },
-      'completed': { color: 'completed', icon: '✅', label: 'Completed' },
-      'failed': { color: 'failed', icon: '❌', label: 'Failed' },
-      'retrying': { color: 'retrying', icon: '🔄', label: 'Retrying' }
-    };
-    return statusMap[status] || statusMap.pending;
+  const deleteJob = async (id) => {
+    if (!window.confirm('Delete this job and its results permanently?')) return;
+    try {
+      await api(`/api/jobs/${id}`, { method: 'DELETE' });
+      setDetail(null);
+      setJobs((j) => j.filter((x) => x.job_id !== id));
+      toast('Job deleted', 'ok');
+    } catch (e) {
+      if (e.message !== 'unauthorized') toast(e.message, 'err');
+    }
   };
 
-  const formatTimestamp = (timestamp) => {
-    if (!timestamp) return '';
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
+  const stats = useMemo(() => {
+    const done = jobs.filter((j) => j.status === 'completed').length;
+    const failed = jobs.filter((j) => j.status === 'failed').length;
+    const today = jobs.filter((j) => Date.now() - new Date(j.created_at).getTime() < 86400000).length;
+    return { total: jobs.length, done, failed, today, rate: jobs.length ? Math.round((done / jobs.length) * 100) : 0 };
+  }, [jobs]);
 
-    if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    return `${diffDays}d ago`;
-  };
+  const shown = jobs.filter((j) => (filter === 'all' || j.status === filter) && j.prompt.toLowerCase().includes(query.toLowerCase()));
+  const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
 
-  // Auth Screen
-  if (!isAuthenticated) {
+  const toastEls = (
+    <div className="toasts" role="status">
+      {toasts.map((t) => <div key={t.id} className={`toast ${t.kind}`}>{t.text}</div>)}
+    </div>
+  );
+
+  if (!token) {
     return (
-      <div className="App">
-        <div className="auth-container">
-          <div className="auth-card">
-            <div className="auth-header">
-              <div className="logo-section">
-                <div className="logo-icon">🤖</div>
-                <h1>SecureAI</h1>
-                <p>Distributed Agent Platform</p>
-              </div>
-            </div>
-
-            <div className="auth-toggle">
-              <button
-                className={`toggle-btn ${isLogin ? 'active' : ''}`}
-                onClick={() => setIsLogin(true)}
-              >
-                Login
-              </button>
-              <button
-                className={`toggle-btn ${!isLogin ? 'active' : ''}`}
-                onClick={() => setIsLogin(false)}
-              >
-                Sign Up
-              </button>
-            </div>
-
-            <form onSubmit={handleAuth} className="auth-form">
-              <div className="form-group">
-                <label>Username</label>
-                <input
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Enter your username"
-                  required
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Password</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your password"
-                  required
-                />
-              </div>
-
-              <button type="submit" className="auth-btn" disabled={loading}>
-                {loading ? (
-                  <span className="loading-text">
-                    <span className="spinner"></span>
-                    {isLogin ? 'Logging in...' : 'Creating account...'}
-                  </span>
-                ) : (
-                  isLogin ? 'Login' : 'Create Account'
-                )}
-              </button>
-            </form>
-
-            <div className="auth-info">
-              <p>💡 Tip: Use any username/password to get started</p>
-            </div>
-          </div>
-        </div>
-      </div>
+      <>
+        <AuthScreen onAuthed={onAuthed} toast={toast} theme={theme} toggleTheme={toggleTheme} />
+        {toastEls}
+      </>
     );
   }
 
-  // Main Application
   return (
-    <div className="App">
-      <div className="background-elements">
-        <div className="gradient-bg"></div>
-        <div className="floating-shapes">
-          <div className="shape shape-1"></div>
-          <div className="shape shape-2"></div>
-          <div className="shape shape-3"></div>
+    <div className="shell">
+      <header className="topbar">
+        <div className="brand"><span className="brand-mark">⛨</span> SecureAI <span className="env">Mission Control</span></div>
+        <div className="top-actions">
+          <span className="live"><i /> Gemini 2.5 Flash</span>
+          <button className="ghost icon-btn" onClick={toggleTheme} aria-label="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
+          <span className="user-chip" title={email}>{(email || '?')[0].toUpperCase()}</span>
+          <button className="ghost" onClick={() => logout()}>Sign out</button>
         </div>
-      </div>
+      </header>
 
-      <div className="main-container">
-        {/* Header */}
-        <header className="app-header">
-          <div className="header-brand">
-            <div className="logo-icon">🤖</div>
-            <div>
-              <h1>SecureAI</h1>
-              <p className="header-subtitle">Distributed Agent Platform</p>
-            </div>
+      <main className="content">
+        <section className="stats">
+          <div className="stat"><small>Total missions</small><b>{stats.total}</b></div>
+          <div className="stat"><small>Last 24h</small><b>{stats.today}</b></div>
+          <div className="stat">
+            <small>Success rate</small><b>{stats.rate}<em>%</em></b>
+            <div className="bar"><span style={{ width: `${stats.rate}%` }} /></div>
           </div>
+          <div className="stat"><small>Failed</small><b className={stats.failed ? 'bad' : ''}>{stats.failed}</b></div>
+        </section>
 
-          <div className="header-actions">
-            <div className={`connection-status ${connectionStatus}`}>
-              <div className="status-dot"></div>
-              <span>
-                {connectionStatus === 'connected' ? 'Live' :
-                 connectionStatus === 'connecting' ? 'Connecting...' :
-                 connectionStatus === 'error' ? 'Error' : 'Offline'}
-              </span>
-            </div>
-            <button onClick={handleLogout} className="logout-btn">
-              <span>Logout</span>
-              <span>→</span>
-            </button>
+        <section className="composer card">
+          <div className="card-head">
+            <h2>New mission</h2>
+            <span className="muted hint-kbd"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> to launch</span>
           </div>
-        </header>
-
-        {/* Message Display */}
-        {message && (
-          <div className={`message ${message.type}`}>
-            <div className="message-content">
-              <span className="message-icon">
-                {message.type === 'success' ? '✅' : '⚠️'}
-              </span>
-              <span>{message.text}</span>
-            </div>
-            <button onClick={() => setMessage(null)} className="message-close">×</button>
-          </div>
-        )}
-
-        {/* Task Submission */}
-        <div className="task-submission-section">
-          <div className="section-header">
-            <h2>🚀 Submit New Task</h2>
-            <p>Describe what you want the AI agents to accomplish</p>
-          </div>
-
-          <form onSubmit={handleSubmitTask} className="task-form">
-            <div className="task-input-wrapper">
-              <textarea
-                value={taskPrompt}
-                onChange={(e) => setTaskPrompt(e.target.value)}
-                placeholder="Example: Research the latest developments in quantum computing and summarize the key findings..."
-                className="task-input"
-                rows="4"
-              />
-              <div className="task-input-footer">
-                <span className="char-count">{taskPrompt.length} characters</span>
-                <button type="submit" className="submit-btn" disabled={loading || !taskPrompt.trim()}>
-                  {loading ? (
-                    <span className="loading-text">
-                      <span className="spinner"></span>
-                      Submitting...
-                    </span>
-                  ) : (
-                    <>
-                      <span>Submit Task</span>
-                      <span>→</span>
-                    </>
-                  )}
-                </button>
+          <form onSubmit={run}>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run(e); }}
+              placeholder="Describe what you want the agents to accomplish…"
+              maxLength={5000}
+              rows={4}
+              disabled={running}
+            />
+            <div className="composer-foot">
+              <div className="chips">
+                {EXAMPLES.map((x) => <button type="button" key={x} className="chip" disabled={running} onClick={() => setPrompt(x)}>{x}</button>)}
+              </div>
+              <div className="launch">
+                <small className="muted">{prompt.length}/5000</small>
+                <button className="primary" disabled={running || !prompt.trim()}>{running ? 'Agents working…' : 'Launch agents →'}</button>
               </div>
             </div>
           </form>
+          {stage >= 0 && <Pipeline stage={stage} />}
+        </section>
 
-          <div className="quick-actions">
-            <div className="quick-prompts">
-              <span className="quick-label">Quick prompts:</span>
-              <button
-                onClick={() => setTaskPrompt('Research the latest AI trends and summarize key developments')}
-                className="quick-btn"
-              >
-                🔬 AI Research
-              </button>
-              <button
-                onClick={() => setTaskPrompt('Scrape example.com and extract the main content')}
-                className="quick-btn"
-              >
-                🌐 Web Scraping
-              </button>
-              <button
-                onClick={() => setTaskPrompt('Send email to test@example.com about the project update')}
-                className="quick-btn"
-              >
-                📧 Email Task
-              </button>
+        <section className="history card">
+          <div className="card-head">
+            <h2>Mission history</h2>
+            <div className="tools">
+              <input className="search" placeholder="Search prompts…" value={query} onChange={(e) => setQuery(e.target.value)} />
+              <div className="seg">
+                {['all', 'completed', 'failed'].map((f) => (
+                  <button key={f} className={filter === f ? 'on' : ''} onClick={() => setFilter(f)}>{f}</button>
+                ))}
+              </div>
+              <button className="ghost" onClick={loadJobs} disabled={loadingJobs} aria-label="Refresh">{loadingJobs ? '…' : '↻'}</button>
             </div>
           </div>
-        </div>
-
-        {/* Task Stats */}
-        <div className="task-stats">
-          <div className="stat-card">
-            <div className="stat-icon">📋</div>
-            <div className="stat-content">
-              <span className="stat-value">{tasks.length}</span>
-              <span className="stat-label">Total Tasks</span>
-            </div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-icon">⚙️</div>
-            <div className="stat-content">
-              <span className="stat-value">{tasks.filter(t => t.status === 'processing').length}</span>
-              <span className="stat-label">Processing</span>
-            </div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-icon">✅</div>
-            <div className="stat-content">
-              <span className="stat-value">{tasks.filter(t => t.status === 'completed').length}</span>
-              <span className="stat-label">Completed</span>
-            </div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-icon">❌</div>
-            <div className="stat-content">
-              <span className="stat-value">{tasks.filter(t => t.status === 'failed').length}</span>
-              <span className="stat-label">Failed</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Tasks List */}
-        <div className="tasks-section">
-          <div className="section-header">
-            <h2>📊 Your Tasks</h2>
-            <button onClick={fetchTasks} className="refresh-btn" disabled={loading}>
-              <span className={loading ? 'spinner' : '🔄'}></span>
-              Refresh
-            </button>
-          </div>
-
-          {loading && tasks.length === 0 ? (
-            <div className="loading-state">
-              <div className="loading-spinner"></div>
-              <p>Loading your tasks...</p>
-            </div>
-          ) : tasks.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">📭</div>
-              <h3>No tasks yet</h3>
-              <p>Submit your first task above to get started!</p>
+          {shown.length === 0 ? (
+            <div className="empty">
+              <div className="empty-art">⛨</div>
+              <p>{jobs.length === 0 ? 'No missions yet. Launch your first one above.' : 'No missions match your filters.'}</p>
             </div>
           ) : (
-            <div className="tasks-list">
-              {tasks.map((task) => {
-                const statusInfo = getStatusInfo(task.status);
-                return (
-                  <div key={task.trace_id} className={`task-card ${statusInfo.color}`}>
-                    <div className="task-card-header">
-                      <div className="task-identity">
-                        <span className="task-icon">
-                          {getTaskIcon(task.agent_type)}
-                        </span>
-                        <div>
-                          <span className="task-id">Task #{task.id}</span>
-                          <span className="task-type-badge">{task.agent_type}</span>
-                        </div>
-                      </div>
-                      <div className={`task-status ${statusInfo.color}`}>
-                        <span className="status-icon">{statusInfo.icon}</span>
-                        <span className="status-label">{statusInfo.label}</span>
-                      </div>
-                    </div>
-
-                    <div className="task-body">
-                      <p className="task-description">{task.description || task.prompt}</p>
-
-                      {(task.status === 'completed' || task.status === 'failed') && (
-                        <button
-                          onClick={() => fetchTaskDetails(task.job_id)}
-                          className="view-results-btn"
-                        >
-                          {task.status === 'completed' ? '📄 View Results' : '🔍 View Details'}
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="task-footer">
-                      <div className="task-meta">
-                        <span className="trace-id" title={task.trace_id}>
-                          ID: {task.trace_id.substring(0, 8)}...
-                        </span>
-                        <span className="task-time">
-                          {formatTimestamp(task.created_at || task.timestamp)}
-                        </span>
-                      </div>
-                      {task.status === 'failed' && (
-                        <button
-                          onClick={() => setTaskPrompt(task.description || task.prompt)}
-                          className="retry-btn"
-                        >
-                          🔄 Retry
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Task Results Modal */}
-        {showResultsModal && selectedTask && (
-          <div className="modal-overlay" onClick={() => setShowResultsModal(false)}>
-            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-              <div className="modal-header">
-                <h3>📄 Task Details & Results</h3>
-                <button onClick={() => setShowResultsModal(false)} className="modal-close">×</button>
-              </div>
-              <div className="modal-body">
-                <div className="detail-section">
-                  <h4>Task Information</h4>
-                  <div className="detail-row">
-                    <span className="detail-label">Status:</span>
-                    <span className={`detail-value status-${selectedTask.status}`}>
-                      {getStatusInfo(selectedTask.status).icon} {getStatusInfo(selectedTask.status).label}
+            <ul className="jobs">
+              {shown.map((j) => (
+                <li key={j.job_id}>
+                  <button className="job" onClick={() => openJob(j.job_id)}>
+                    <span className={`dot ${j.status}`} />
+                    <span className="job-main">
+                      <span className="job-prompt">{j.prompt}</span>
+                      <small className="mono muted">#{j.job_id} · {timeAgo(j.created_at)}</small>
                     </span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">Agent Type:</span>
-                    <span className="detail-value">{getTaskIcon(selectedTask.tasks?.[0]?.agent_type)} {selectedTask.tasks?.[0]?.agent_type || 'N/A'}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">Job ID:</span>
-                    <span className="detail-value">#{selectedTask.job_id}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">Trace ID:</span>
-                    <span className="detail-value trace-id">{selectedTask.trace_id}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">Created:</span>
-                    <span className="detail-value">{formatTimestamp(selectedTask.created_at)}</span>
-                  </div>
-                </div>
-
-                <div className="detail-section">
-                  <h4>Task Description</h4>
-                  <p className="detail-prompt">{selectedTask.prompt}</p>
-                </div>
-
-                {selectedTask.tasks && selectedTask.tasks.length > 0 && (
-                  <div className="detail-section">
-                    <h4>Agent Results</h4>
-                    {selectedTask.tasks.map((task) => (
-                      <div key={task.task_id} className="task-result-detail">
-                        <div className="result-meta">
-                          <span className="agent-type">
-                            {getTaskIcon(task.agent_type)} {task.agent_type}
-                          </span>
-                          <span className={`task-status status-${task.status}`}>
-                            {getStatusInfo(task.status).icon} {getStatusInfo(task.status).label}
-                          </span>
-                        </div>
-                        <div className="result-description">
-                          <strong>Task:</strong> {task.description}
-                        </div>
-                        {task.result && (
-                          <div className="result-content">
-                            <div className="result-header">
-                              <strong>🎯 Result:</strong>
-                            </div>
-                            <pre className="result-text">{task.result}</pre>
-                          </div>
-                        )}
-                        {!task.result && task.status === 'processing' && (
-                          <div className="result-processing">
-                            <span className="spinner"></span>
-                            <span>Processing...</span>
-                          </div>
-                        )}
-                        {!task.result && task.status === 'failed' && (
-                          <div className="result-error">
-                            ❌ Task failed. No result available.
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="modal-footer">
-                <button
-                  onClick={() => setShowResultsModal(false)}
-                  className="modal-btn modal-btn-primary"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Footer */}
-        <footer className="app-footer">
-          <p>🤖 SecureAI Platform • Multi-Agent Orchestration System</p>
-          <p className="footer-subtitle">Powered by Kafka, Redis & AI Agents</p>
-        </footer>
-      </div>
+                    <span className={`badge ${j.status}`}>{j.status}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </main>
+      <Drawer job={detail} onClose={() => setDetail(null)} onDelete={deleteJob} toast={toast} />
+      {toastEls}
     </div>
   );
 }
